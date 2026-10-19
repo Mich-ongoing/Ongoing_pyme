@@ -47,18 +47,12 @@ otra vez: si cambia más del 3 % de la página el elemento queda en "la web se v
 las capturas de antes, después y los cambios en rojo, y un botón **Revertir** (el worker ≥ 2.2
 guarda la versión anterior 7 días). Las capturas se borran a los 30 días.
 
-Necesita Browserless (Chrome sin pantalla) en el servidor del panel, solo en localhost. Como
-root (Plesk → Herramientas y configuración → Terminal SSH):
-
-```bash
-docker run -d --name webminder-capturas --restart unless-stopped \
-  -p 127.0.0.1:3900:3000 --memory=2g \
-  -e TOKEN=<WEBMINDER_CAPTURAS_TOKEN> -e CONCURRENT=2 -e TIMEOUT=90000 \
-  ghcr.io/browserless/chromium:latest
-```
-
-y en el `.env`: `WEBMINDER_CAPTURAS_URL=http://127.0.0.1:3900` y `WEBMINDER_CAPTURAS_TOKEN`.
-Sin esas dos variables la comparación queda apagada y todo funciona como antes.
+Usa Cloudflare Browser Run (Chrome sin pantalla en Cloudflare). En el `.env`:
+`WEBMINDER_CF_ACCOUNT_ID` (Cloudflare → la cuenta → ID de cuenta) y `WEBMINDER_CF_TOKEN` (token de
+API con permiso **Browser Rendering - Edit**). Sin ellas la comparación queda apagada.
+Plan gratuito: 1 captura cada 10 s y 10 min de navegador al día (~6 capturas por elemento,
+unos 15-20 elementos al día); el panel espera solo cuando Cloudflare responde 429. Con Workers
+Paid (5 $/mes) no hay límite diario.
 
 ## Pruebas
 

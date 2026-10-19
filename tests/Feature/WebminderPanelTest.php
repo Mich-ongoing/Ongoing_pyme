@@ -299,12 +299,15 @@ class WebminderPanelTest extends TestCase
     public function test_el_lote_compara_capturas_y_permite_revertir(): void
     {
         Storage::fake('local');
-        config(['services.capturas.url' => 'http://capturas.test:3000', 'services.capturas.token' => 't']);
+        config(['services.capturas.cuenta' => 'cuenta', 'services.capturas.token' => 't']);
         $capturas = 0;
         Http::fake(function (Request $req) use (&$capturas) {
             return match (true) {
                 // 2 vistas x (antes, antes2) y luego las de después, con un bloque roto
-                str_contains($req->url(), 'capturas.test') => Http::response(++$capturas > 4 ? self::jpeg(bloque: [100, 300, 300, 500]) : self::jpeg()),
+                // La primera vez Cloudflare pide esperar: se reintenta la misma captura
+                str_contains($req->url(), 'browser-run/screenshot') => ++$capturas === 1
+                    ? Http::response(['errors' => [['message' => 'Rate limit']]], 429, ['Retry-After' => '10'])
+                    : Http::response($capturas > 5 ? self::jpeg(bloque: [100, 300, 300, 500]) : self::jpeg()),
                 str_ends_with($req->url(), '/update') => Http::response(['success' => true, 'verified' => true, 'item' => 'a/a.php', 'backup' => 'a-backup-123']),
                 default => Http::response(['success' => true, 'data' => []]),
             };
@@ -320,6 +323,8 @@ class WebminderPanelTest extends TestCase
         $this->assertSame('a-backup-123', $item['backup']);
         Storage::disk('local')->assertExists(CapturasService::ruta($e->id, '0-movil-diff.jpg'));
         Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/update') && ($r->data()['keep_backup'] ?? false) === true);
+        Http::assertSent(fn (Request $r) => str_contains($r->url(), 'accounts/cuenta/browser-run/screenshot') && $r->hasHeader('Authorization', 'Bearer t')
+            && $r->data()['screenshotOptions']['fullPage'] === true && $r->data()['viewport']['width'] === 390 && isset($r->data()['userAgent']));
 
         $usuario = User::factory()->create();
         $this->actingAs($usuario)->get(route('webminder-panel.ejecuciones.captura', [$e, '0-escritorio-antes.jpg']))->assertOk();

@@ -28,10 +28,10 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
-    // Browserless (Docker en el servidor del panel) para la comparación visual
+    // Cloudflare Browser Run para la comparación visual (token con permiso "Browser Rendering - Edit")
     'capturas' => [
-        'url' => env('WEBMINDER_CAPTURAS_URL'),
-        'token' => env('WEBMINDER_CAPTURAS_TOKEN'),
+        'cuenta' => env('WEBMINDER_CF_ACCOUNT_ID'),
+        'token' => env('WEBMINDER_CF_TOKEN'),
     ],
 
     'slack' => [

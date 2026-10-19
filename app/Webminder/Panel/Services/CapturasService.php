@@ -2,23 +2,26 @@
 
 namespace App\Webminder\Panel\Services;
 
-use Illuminate\Http\Client\Pool;
-use Illuminate\Http\Client\Response;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 
 /**
- * Comparación visual antes/después de una actualización con Chrome sin pantalla
- * (Browserless en Docker, solo accesible desde el servidor del panel).
- * Sin WEBMINDER_CAPTURAS_URL en el .env la función queda apagada.
+ * Comparación visual antes/después de una actualización con Cloudflare Browser
+ * Run (Chrome sin pantalla en Cloudflare, API REST /screenshot).
+ * Sin WEBMINDER_CF_ACCOUNT_ID y WEBMINDER_CF_TOKEN la función queda apagada.
  */
 class CapturasService
 {
     public const VISTAS = [
         'escritorio' => ['width' => 1366, 'height' => 900],
-        'movil' => ['width' => 390, 'height' => 844, 'isMobile' => true, 'hasTouch' => true],
+        'movil' => ['width' => 390, 'height' => 844],
     ];
+
+    // Algunas webs (y cachés como LiteSpeed) sirven otro HTML a móviles
+    private const UA_MOVIL = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
 
     /** % de la página que puede cambiar sin avisar. */
     public const UMBRAL = 3.0;
@@ -31,30 +34,47 @@ class CapturasService
 
     public function activa(): bool
     {
-        return (bool) config('services.capturas.url');
+        return config('services.capturas.cuenta') && config('services.capturas.token');
     }
 
     /**
-     * Captura de página completa en cada vista, en paralelo.
+     * Captura de página completa en cada vista. De una en una: el plan gratuito
+     * de Cloudflare admite 1 cada 10 s y responde 429 con Retry-After si se pasa.
      * @return array<string,?string> vista => jpeg, o null si esa captura falló
      */
     public function capturar(string $url): array
     {
         // Parámetro propio: que ninguna caché de página sirva la versión de antes
         $url .= (str_contains($url, '?') ? '&' : '?') . 'webminder_check=' . Str::random(8);
-        $endpoint = rtrim(config('services.capturas.url'), '/') . '/chromium/screenshot?token=' . urlencode((string) config('services.capturas.token'));
+        $endpoint = 'https://api.cloudflare.com/client/v4/accounts/' . config('services.capturas.cuenta') . '/browser-run/screenshot';
 
-        $respuestas = Http::pool(fn (Pool $pool) => collect(self::VISTAS)->map(fn ($viewport, $vista) => $pool->as($vista)->timeout(90)->post($endpoint, [
-            'url' => $url,
-            'viewport' => $viewport,
-            'options' => ['type' => 'jpeg', 'quality' => 70, 'fullPage' => true],
-            'gotoOptions' => ['waitUntil' => 'networkidle2', 'timeout' => 45000],
-            // Animaciones y cursores parpadeantes darían diferencias falsas
-            'addStyleTag' => [['content' => '*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}']],
-            'bestAttempt' => true,
-        ]))->all());
+        $capturas = [];
+        foreach (self::VISTAS as $vista => $viewport) {
+            $capturas[$vista] = null;
+            for ($intento = 0; $intento < 4; $intento++) {
+                try {
+                    $r = Http::withToken((string) config('services.capturas.token'))->timeout(90)->post($endpoint, array_filter([
+                        'url' => $url,
+                        'viewport' => $viewport,
+                        'userAgent' => $vista === 'movil' ? self::UA_MOVIL : null,
+                        'screenshotOptions' => ['type' => 'jpeg', 'quality' => 70, 'fullPage' => true],
+                        'gotoOptions' => ['waitUntil' => 'networkidle2', 'timeout' => 45000],
+                        // Animaciones y cursores parpadeantes darían diferencias falsas
+                        'addStyleTag' => [['content' => '*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}']],
+                    ]));
+                } catch (ConnectionException) {
+                    continue;
+                }
+                if ($r->status() === 429) {
+                    Sleep::for(min(60, max(10, (int) $r->header('Retry-After'))))->seconds();
+                    continue;
+                }
+                $capturas[$vista] = $r->successful() && str_starts_with($r->body(), "\xFF\xD8") ? $r->body() : null;
+                break;
+            }
+        }
 
-        return array_map(fn ($r) => $r instanceof Response && $r->successful() && str_starts_with($r->body(), "\xFF\xD8") ? $r->body() : null, $respuestas);
+        return $capturas;
     }
 
     /**
