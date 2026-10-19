@@ -104,22 +104,12 @@ class SitiosController
      */
     public function verificar(SitioWeb $sitio): RedirectResponse
     {
+        // obtenerStatus ya guarda online/mantenimiento/offline
         $resultado = $this->agente->obtenerStatus($sitio);
 
-        if ($resultado['success'] ?? false) {
-            $sitio->update([
-                'estado' => 'online',
-                'ultima_verificacion' => now(),
-            ]);
-
-            return back()->with('success', 'El estado del sitio web ha sido verificado y sincronizado correctamente.');
-        } else {
-            $sitio->update(['estado' => 'offline']);
-
-            $errorMsg = $resultado['error'] ?? 'El sitio no responde';
-
-            return back()->with('error', 'No se pudo conectar con el sitio: ' . $errorMsg);
-        }
+        return $resultado['success']
+            ? back()->with('success', 'El estado del sitio web ha sido verificado y sincronizado correctamente.')
+            : back()->with('error', 'No se pudo conectar con el sitio: ' . $resultado['error']);
     }
 
     /**
@@ -159,14 +149,35 @@ class SitiosController
     {
         $credencial = $sitio->credencial;
 
-        if ($credencial) {
-            $credencial->update([
+        // Sitio sin vincular (o desvinculado): credenciales nuevas, a pegar en el worker.
+        if (!$credencial?->activa || !$credencial->ultima_utilizacion) {
+            Credencial::updateOrCreate(['sitio_id' => $sitio->id], [
                 'client_id' => Credencial::generarClientId($sitio->id),
                 'client_secret' => Credencial::generarClientSecret(),
+                'activa' => true,
+                'ultima_utilizacion' => null,
             ]);
+
+            return redirect()->route('webminder-panel.sitios.credenciales', $sitio)
+                ->with('success', 'Credenciales nuevas generadas: pega el token de enlace en el worker.');
         }
 
-        return back()->with('success', 'Credenciales regeneradas');
+        // Vinculado: rotar en ambos lados sin romper la conexión.
+        $resultado = $this->agente->rotarSecreto($sitio);
+
+        return $resultado['success']
+            ? back()->with('success', $resultado['message'])
+            : back()->with('error', $resultado['error']);
+    }
+
+    public function desconectar(SitioWeb $sitio): RedirectResponse
+    {
+        $resultado = $this->agente->desconectar($sitio);
+
+        return back()->with(
+            $resultado['success'] ? 'success' : 'error',
+            $resultado['success'] ? 'Sitio desvinculado: el worker ha borrado sus credenciales.' : 'El panel ya no usará estas credenciales, pero el sitio no confirmó: ' . $resultado['error']
+        );
     }
 
     /**

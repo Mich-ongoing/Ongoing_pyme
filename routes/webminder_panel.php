@@ -6,6 +6,10 @@ use App\Webminder\Panel\Http\Controllers\ClientesController;
 use App\Webminder\Panel\Http\Controllers\SitiosController;
 use App\Webminder\Panel\Http\Controllers\OperacionesController;
 use App\Webminder\Panel\Http\Controllers\AuditoriaController;
+use App\Webminder\Panel\Http\Controllers\IngestaController;
+
+// Ingesta del log de actividad de los workers: sin sesión ni CSRF, autenticada por firma HMAC.
+Route::post('api/webminder/ingest', IngestaController::class)->middleware('throttle:120,1')->name('webminder.ingest');
 
 Route::prefix('webminder-panel')->name('webminder-panel.')->middleware(['web', 'auth'])->group(function () {
     
@@ -27,6 +31,7 @@ Route::prefix('webminder-panel')->name('webminder-panel.')->middleware(['web', '
     Route::get('/sitios/{sitio}/paquetes', [SitiosController::class, 'paquetes'])->name('sitios.paquetes');
     Route::post('/sitios/{sitio}/regenerar-credenciales', [SitiosController::class, 'regenerarCredenciales'])->name('sitios.regenerar-credenciales');
     Route::get('/sitios/{sitio}/credenciales', [SitiosController::class, 'credenciales'])->name('sitios.credenciales');
+    Route::post('/sitios/{sitio}/desconectar', [SitiosController::class, 'desconectar'])->name('sitios.desconectar');
 
     // Operaciones remotas
     Route::post('/operaciones/{sitio}/mantenimiento-on', [OperacionesController::class, 'activarMantenimiento'])->name('operaciones.mantenimiento-on');
@@ -36,10 +41,11 @@ Route::prefix('webminder-panel')->name('webminder-panel.')->middleware(['web', '
     Route::post('/operaciones/{sitio}/actualizar', [OperacionesController::class, 'actualizar'])->name('operaciones.actualizar');
     Route::post('/operaciones/{sitio}/corregir-seguridad', [OperacionesController::class, 'corregirSeguridad'])->name('operaciones.corregir-seguridad');
     Route::get('/operaciones/{sitio}/reporte-salud', [OperacionesController::class, 'reporteSalud'])->name('operaciones.reporte-salud');
+    Route::post('/operaciones/{sitio}/sso', [OperacionesController::class, 'sso'])->name('operaciones.sso');
 
     // Auditoría
     Route::get('/auditoria', [AuditoriaController::class, 'index'])->name('auditoria.index');
-    Route::get('/auditoria/{evento}', [AuditoriaController::class, 'show'])->name('auditoria.show');
     Route::get('/auditoria/estadisticas', [AuditoriaController::class, 'estadisticas'])->name('auditoria.estadisticas');
+    Route::get('/auditoria/{evento}', [AuditoriaController::class, 'show'])->name('auditoria.show');
     Route::post('/auditoria/limpiar', [AuditoriaController::class, 'limpiar'])->name('auditoria.limpiar');
 });

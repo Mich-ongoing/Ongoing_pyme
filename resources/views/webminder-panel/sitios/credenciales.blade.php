@@ -4,7 +4,8 @@
         $tokenData = json_encode([
             'id' => $credencial?->client_id,
             'secret' => $credencial?->client_secret,
-            'url' => $sitio->url
+            'url' => $sitio->url,
+            'panel' => rtrim(config('app.url'), '/'),
         ]);
         $quickToken = base64_encode($tokenData);
     @endphp

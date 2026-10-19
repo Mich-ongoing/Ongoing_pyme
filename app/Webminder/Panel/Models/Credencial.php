@@ -26,6 +26,7 @@ class Credencial extends Model
     ];
 
     protected $casts = [
+        'client_secret' => 'encrypted',
         'activa' => 'boolean',
         'ultima_utilizacion' => 'datetime',
         'created_at' => 'datetime',

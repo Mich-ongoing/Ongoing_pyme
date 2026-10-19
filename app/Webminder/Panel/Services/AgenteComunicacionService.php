@@ -2,6 +2,7 @@
 
 namespace App\Webminder\Panel\Services;
 
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use App\Webminder\Panel\Models\SitioWeb;
 use App\Webminder\Panel\Models\Credencial;
@@ -10,207 +11,215 @@ use App\Webminder\Panel\Models\EventoAuditoria;
 
 class AgenteComunicacionService
 {
+    public const API = '/webminder/v1/';
+
     /**
-     * Hacer petición autenticada a un agente remoto
+     * Firma v2 (la misma que WebminderAgent::sign en el worker):
+     * METODO \n ruta \n timestamp \n cuerpo.
      */
-    public function hacerPeticion(
-        SitioWeb $sitio,
-        string $endpoint,
-        array $payload = [],
-        string $metodo = 'POST'
-    ): array {
-        $credencial = $sitio->credencial;
-
-        if (!$credencial || !$credencial->activa) {
-            return [
-                'success' => false,
-                'error' => 'Credenciales no disponibles o inactivas',
-            ];
-        }
-
-        try {
-            $timestamp = time();
-            $bodyJson = json_encode($payload);
-
-            // Generar firma HMAC-SHA256
-            $signature = hash_hmac('sha256', $bodyJson . $timestamp, $credencial->client_secret);
-
-            $endpointPath = (strtolower($sitio->tecnologia ?? '') === 'wordpress')
-                ? "/wp-json/webminder/v1/{$endpoint}"
-                : "/api/webminder/{$endpoint}";
-
-            $url = rtrim($sitio->url, '/') . $endpointPath;
-
-            // Registrar utilización de credencial
-            $credencial->registrarUso();
-
-            // Hacer petición
-            $response = Http::withoutVerifying()
-            ->withHeaders([
-                'X-Webminder-Signature' => $signature,
-                'X-Webminder-Timestamp' => (string)$timestamp,
-                'Content-Type' => 'application/json',
-            ])
-            ->timeout(30)
-            ->retry(2, 1000)
-            ->send($metodo, $url, [
-                'body' => $bodyJson,
-            ]);
-
-            $data = $response->json();
-
-            // Registrar evento
-            EventoAuditoria::registrarExito(
-                'webminder_' . $endpoint,
-                "Petición a endpoint: {$endpoint}",
-                $sitio->id,
-                $data
-            );
-
-            return $data ?? ['success' => false];
-
-        } catch (\Exception $e) {
-            EventoAuditoria::registrarError(
-                'webminder_error',
-                "Error en comunicación con {$sitio->nombre}",
-                $e->getMessage(),
-                $sitio->id
-            );
-
-            return [
-                'success' => false,
-                'error' => $e->getMessage(),
-            ];
-        }
+    public static function firmar(string $metodo, string $ruta, int $timestamp, string $cuerpo, string $secreto): string
+    {
+        return hash_hmac('sha256', strtoupper($metodo) . "\n" . $ruta . "\n" . $timestamp . "\n" . $cuerpo, $secreto);
     }
 
     /**
-     * Obtener estado de un sitio
+     * Petición firmada a un worker. Nunca lanza: devuelve siempre un array con
+     * 'success' y, si falla, 'error'.
+     */
+    public function hacerPeticion(SitioWeb $sitio, string $endpoint, array $payload = [], ?string $secreto = null, int $timeout = 30): array
+    {
+        $credencial = $sitio->credencial;
+
+        if (!$credencial || !$credencial->activa) {
+            return ['success' => false, 'error' => 'Credenciales no disponibles o inactivas'];
+        }
+
+        $secreto ??= $credencial->client_secret;
+        $ruta = self::API . $endpoint;
+        $cuerpo = json_encode($payload ?: new \stdClass());
+        $timestamp = time();
+
+        try {
+            // Sin retry(): son POST no idempotentes (un /update reintentado se
+            // aplicaría dos veces, o el worker lo rechazaría como replay).
+            $response = Http::withHeaders([
+                'X-Webminder-Signature-V2' => self::firmar('POST', $ruta, $timestamp, $cuerpo, $secreto),
+                // shortcut: firma v1 para los workers < 2.0 (pharmapiping, minestamp); quitar cuando todos estén en 2.x.
+                'X-Webminder-Signature' => hash_hmac('sha256', $cuerpo . $timestamp, $secreto),
+                'X-Webminder-Timestamp' => (string) $timestamp,
+            ])
+                ->withBody($cuerpo, 'application/json')
+                ->timeout($timeout)
+                ->post(rtrim($sitio->url, '/') . '/wp-json' . $ruta);
+        } catch (ConnectionException $e) {
+            EventoAuditoria::registrarError('webminder_' . $endpoint, "Sin conexión con {$sitio->nombre}", $e->getMessage(), $sitio->id);
+
+            return ['success' => false, 'error' => 'Sin conexión: ' . $e->getMessage()];
+        }
+
+        $credencial->registrarUso();
+        $data = self::normalizar($response->json(), $response->status());
+
+        $resumen = ['http' => $response->status(), 'mensaje' => $data['message'] ?? $data['error'] ?? null];
+        if ($data['success']) {
+            EventoAuditoria::registrarExito('webminder_' . $endpoint, "Petición a {$endpoint}", $sitio->id, $resumen);
+        } else {
+            EventoAuditoria::registrarError('webminder_' . $endpoint, "Petición a {$endpoint}", (string) ($data['error'] ?? 'Error'), $sitio->id, $resumen);
+        }
+
+        return $data;
+    }
+
+    /**
+     * Unifica las respuestas del worker: las suyas ({success, message, ...}) y
+     * los WP_Error de WordPress ({code, message, data:{status}}).
+     */
+    private static function normalizar(mixed $json, int $status): array
+    {
+        if (!is_array($json)) {
+            return ['success' => false, 'error' => "Respuesta no válida del sitio (HTTP {$status})"];
+        }
+        if (!array_key_exists('success', $json)) {
+            // WP_Error de un permission_callback o de una ruta inexistente
+            return ['success' => false, 'error' => $json['message'] ?? "Error HTTP {$status}", 'code' => $json['code'] ?? null];
+        }
+        $json['success'] = (bool) $json['success'];
+        if (!$json['success'] && !isset($json['error'])) {
+            $json['error'] = $json['message'] ?? 'Error desconocido';
+        }
+
+        return $json;
+    }
+
+    /**
+     * Obtener estado de un sitio y guardarlo en el histórico.
      */
     public function obtenerStatus(SitioWeb $sitio): array
     {
-        $resultado = $this->hacerPeticion($sitio, 'status');
+        $resultado = $this->hacerPeticion($sitio, 'status', [], null, 60);
 
-        if ($resultado['success'] ?? false) {
-            $esMantenimiento = $resultado['data']['maintenance_mode'] ?? false;
-            $sitioEstado = $esMantenimiento ? 'mantenimiento' : 'online';
+        if ($resultado['success']) {
+            $datos = $resultado['data'] ?? [];
+            $estado = !empty($datos['maintenance_mode']) ? 'mantenimiento' : 'online';
 
-            // Guardar estado
             EstadoSitio::create([
                 'sitio_id' => $sitio->id,
-                'estado' => $sitioEstado,
-                'datos' => $resultado['data'] ?? [],
-                'metricas' => $resultado['configuration'] ?? [],
+                'estado' => $estado,
+                'datos' => $datos,
+                'metricas' => [],
                 'codigo_http' => 200,
                 'tiempo_respuesta_ms' => 0,
             ]);
 
-            // Actualizar sitio
             $sitio->update([
-                'estado' => $sitioEstado,
+                'estado' => $estado,
                 'ultima_verificacion' => now(),
-                'version_php' => $resultado['data']['php_version'] ?? null,
-                'version_laravel' => $resultado['data']['laravel_version'] ?? null,
+                'version_php' => $datos['php_version'] ?? null,
             ]);
+        } else {
+            $sitio->update(['estado' => 'offline', 'ultima_verificacion' => now()]);
         }
 
         return $resultado;
     }
 
     /**
-     * Hacer ping rápido
+     * Ping sin firma (uptime).
      */
     public function ping(SitioWeb $sitio): bool
     {
         try {
-            $endpointPath = (strtolower($sitio->tecnologia ?? '') === 'wordpress')
-                ? '/wp-json/webminder/v1/ping'
-                : '/api/webminder/ping';
+            $json = Http::timeout(10)->get(rtrim($sitio->url, '/') . '/wp-json' . self::API . 'ping')->json();
 
-            $url = rtrim($sitio->url, '/') . $endpointPath;
-            $response = Http::withoutVerifying()->timeout(10)->get($url);
-
-            if (!$response->successful()) {
-                return false;
-            }
-
-            $json = $response->json();
-
-            return (($json['success'] ?? false) === true) || (($json['status'] ?? '') === 'ok');
-        } catch (\Exception $e) {
+            return ($json['status'] ?? '') === 'ok';
+        } catch (ConnectionException) {
             return false;
         }
     }
 
-    /**
-     * Activar mantenimiento remoto
-     */
     public function activarMantenimiento(SitioWeb $sitio): array
     {
         return $this->hacerPeticion($sitio, 'maintenance-mode', ['active' => true]);
     }
 
-    /**
-     * Desactivar mantenimiento remoto
-     */
     public function desactivarMantenimiento(SitioWeb $sitio): array
     {
         return $this->hacerPeticion($sitio, 'maintenance-mode', ['active' => false]);
     }
 
     /**
-     * Limpiar base de datos remota
+     * @param string[] $items revisions|spam_comments|trashed_comments|transients|auto_drafts|trashed_posts|optimize_tables
      */
-    public function limpiarBD(SitioWeb $sitio, array $opciones = []): array
+    public function limpiarBD(SitioWeb $sitio, array $items): array
     {
-        return $this->hacerPeticion($sitio, 'db-clean', $opciones);
+        return $this->hacerPeticion($sitio, 'db-clean', ['items' => array_values($items)], null, 120);
     }
 
-    /**
-     * Obtener salud de BD remota
-     */
     public function obtenerSaludBD(SitioWeb $sitio): array
     {
         return $this->hacerPeticion($sitio, 'db-status');
     }
 
-    /**
-     * Obtener actualizaciones pendientes
-     */
-    public function obtenerActualizaciones(SitioWeb $sitio): array
+    public function obtenerActualizaciones(SitioWeb $sitio, bool $refrescar = false): array
     {
-        return $this->hacerPeticion($sitio, 'updates');
+        return $this->hacerPeticion($sitio, 'updates', $refrescar ? ['refresh' => true] : [], null, 90);
     }
 
     /**
-     * Ejecutar actualización remota
+     * Actualiza un ítem. $tipo: plugin|theme|translation; $item: "carpeta/archivo.php" o slug del tema.
      */
-    public function ejecutarActualizacion(SitioWeb $sitio, string $paquete): array
+    public function ejecutarActualizacion(SitioWeb $sitio, string $tipo, string $item, array $extra = []): array
     {
-        return $this->hacerPeticion($sitio, 'update', ['package' => $paquete]);
+        return $this->hacerPeticion($sitio, 'update', ['type' => $tipo, 'item' => $item] + $extra, null, 300);
     }
 
-    /**
-     * Obtener lista de paquetes
-     */
     public function obtenerPaquetes(SitioWeb $sitio): array
     {
         return $this->hacerPeticion($sitio, 'plugins');
     }
 
-    /**
-     * Corregir problema de seguridad
-     */
     public function corregirSeguridad(SitioWeb $sitio, string $problema): array
     {
         return $this->hacerPeticion($sitio, 'fix-security', ['issue' => $problema]);
     }
 
-    /**
-     * Obtener salud completa del sitio
-     */
     public function obtenerSaludCompleta(SitioWeb $sitio): array
     {
-        return $this->hacerPeticion($sitio, 'site-health');
+        return $this->hacerPeticion($sitio, 'site-health', [], null, 60);
+    }
+
+    public function sso(SitioWeb $sitio): array
+    {
+        return $this->hacerPeticion($sitio, 'sso');
+    }
+
+    /**
+     * Rota el secreto sin romper el vínculo: el worker recibe el nuevo firmado
+     * con el actual y SOLO se guarda en el panel si una petición firmada con el
+     * nuevo funciona (si la respuesta de /rotate se pierde, no quedan desfasados).
+     */
+    public function rotarSecreto(SitioWeb $sitio): array
+    {
+        $nuevo = Credencial::generarClientSecret();
+        $this->hacerPeticion($sitio, 'rotate', ['secret' => $nuevo]);
+
+        $prueba = $this->hacerPeticion($sitio, 'ping-auth', [], $nuevo);
+        if (!$prueba['success']) {
+            return ['success' => false, 'error' => 'El sitio no aceptó el secreto nuevo; se mantiene el actual. ' . ($prueba['error'] ?? '')];
+        }
+        $sitio->credencial->update(['client_secret' => $nuevo]);
+
+        return ['success' => true, 'message' => 'Secreto rotado en el sitio y en el panel.'];
+    }
+
+    /**
+     * Desvincula: el worker borra sus credenciales y el panel las desactiva.
+     */
+    public function desconectar(SitioWeb $sitio): array
+    {
+        $resultado = $this->hacerPeticion($sitio, 'disconnect');
+        $sitio->credencial?->update(['activa' => false]);
+
+        return $resultado;
     }
 }

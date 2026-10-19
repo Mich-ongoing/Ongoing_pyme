@@ -71,6 +71,9 @@ class WebminderAgent {
     // aunque se recargue. Se limpia al actualizarse con éxito y se poda a los
     // ítems aún pendientes en cada /updates. autoload=no (mapa pequeño).
     const OPTION_UPDATE_FAILURES = 'ongoing_webminder_update_failures';
+    // URL base del panel que vinculó el sitio (viene en el token de enlace).
+    // De ella salen la ingesta del log y el manifiesto de autoactualización.
+    const OPTION_PANEL_URL = 'ongoing_webminder_panel_url';
 
     public function __construct() {
         register_activation_hook(__FILE__, [$this, 'activate']);
@@ -210,6 +213,12 @@ class WebminderAgent {
                         if (!empty($decoded['secret'])) {
                             $client_secret = sanitize_text_field($decoded['secret']);
                         }
+                        if (!empty($decoded['panel'])) {
+                            $panel_url = self::valid_panel_url($decoded['panel']);
+                            if ($panel_url) {
+                                update_option(self::OPTION_PANEL_URL, $panel_url, false);
+                            }
+                        }
                     }
                 }
 
@@ -223,7 +232,7 @@ class WebminderAgent {
                     $message_type = 'error';
                 }
             } elseif ($_POST['ongoing_action'] === 'disconnect') {
-                delete_option('ongoing_webminder_last_sync');
+                self::revoke_credentials();
                 $message = __('Sitio desconectado del panel.', self::TEXT_DOMAIN);
             }
         }
@@ -399,6 +408,19 @@ class WebminderAgent {
             'permission_callback' => [$this, 'verify_signature']
         ]);
 
+        // Ping firmado: el panel comprueba que un secreto funciona (rotación).
+        register_rest_route(self::API_NAMESPACE, '/ping-auth', [
+            'methods'             => 'POST',
+            'callback'            => function () { return rest_ensure_response(['success' => true, 'version' => self::VERSION]); },
+            'permission_callback' => [$this, 'verify_signature']
+        ]);
+
+        register_rest_route(self::API_NAMESPACE, '/rotate', [
+            'methods'             => 'POST',
+            'callback'            => [$this, 'handle_rotate'],
+            'permission_callback' => [$this, 'verify_signature']
+        ]);
+
         register_rest_route(self::API_NAMESPACE, '/disconnect', [
             'methods'             => 'POST',
             'callback'            => [$this, 'handle_disconnect'],
@@ -446,11 +468,53 @@ class WebminderAgent {
      * Rompe la conexión eliminando el timestamp de last_sync.
      */
     public function handle_disconnect(\WP_REST_Request $request) {
-        delete_option('ongoing_webminder_last_sync');
+        self::revoke_credentials();
         return rest_ensure_response([
             'success' => true,
             'message' => 'El agente ha sido desconectado correctamente del panel central.'
         ]);
+    }
+
+    /**
+     * Desconectar = el secreto deja de valer. Antes solo se borraba la marca de
+     * "conectado" y quien tuviera el secreto seguía pudiendo firmar peticiones.
+     */
+    public static function revoke_credentials() {
+        delete_option('ongoing_webminder_last_sync');
+        delete_option(self::OPTION_CLIENT_ID);
+        delete_option(self::OPTION_CLIENT_SECRET);
+        delete_option(self::OPTION_PANEL_URL);
+    }
+
+    /**
+     * Rotación del secreto pedida por el panel (firmada con el secreto actual).
+     */
+    public function handle_rotate(\WP_REST_Request $request) {
+        $params = $request->get_json_params();
+        $secret = isset($params['secret']) ? (string) $params['secret'] : '';
+        if (!preg_match('/^[A-Za-z0-9_]{40,128}$/', $secret)) {
+            return new \WP_Error('invalid_secret', 'Secreto nuevo con formato inválido.', ['status' => 400]);
+        }
+        update_option(self::OPTION_CLIENT_SECRET, $secret, false);
+        return rest_ensure_response(['success' => true, 'message' => 'Secreto rotado.']);
+    }
+
+    /**
+     * URL del panel admitida: https, o http solo para entornos locales (.ddev.site / localhost).
+     * @return string|null
+     */
+    public static function valid_panel_url($url) {
+        $url = esc_url_raw(trim((string) $url));
+        $scheme = wp_parse_url($url, PHP_URL_SCHEME);
+        $host = (string) wp_parse_url($url, PHP_URL_HOST);
+        if ($host === '') {
+            return null;
+        }
+        $local = $host === 'localhost' || substr($host, -10) === '.ddev.site' || strpos($host, 'ddev-') === 0;
+        if ($scheme === 'https' || ($scheme === 'http' && $local)) {
+            return untrailingslashit($url);
+        }
+        return null;
     }
 
     /**
@@ -1458,12 +1522,15 @@ class WebminderAgent {
      * Genera un token temporal para hacer SSO 1-Click Login.
      */
     public function handle_sso_request(\WP_REST_Request $request) {
-        $params = $request->get_json_params();
-        
+        $user = self::sso_user();
+        if (!$user) {
+            return new \WP_Error('no_agency_account', 'No existe una cuenta de la agencia (' . implode(', ', self::SSO_PREFERRED_EMAILS) . ') con rol administrador en este sitio. El SSO nunca entra con la cuenta del cliente.', ['status' => 404]);
+        }
+
         $sso_token = bin2hex(random_bytes(16));
         // Se almacena el hash, no el token: si la BD se filtra (backup,
         // SQLi en otro plugin), los transients no revelan tokens usables.
-        set_transient('ongoing_sso_token_' . hash('sha256', $sso_token), true, 30);
+        set_transient('ongoing_sso_token_' . hash('sha256', $sso_token), (int) $user->ID, 30);
 
         $login_url = add_query_arg([
             'ongoing_sso' => $sso_token
@@ -1473,6 +1540,21 @@ class WebminderAgent {
             'success' => true,
             'login_url' => $login_url
         ]);
+    }
+
+    /**
+     * Cuenta de la agencia para el SSO, en orden de preferencia. Sin fallback
+     * al admin del cliente: entrar con su cuenta sería suplantarle.
+     * @return \WP_User|null
+     */
+    public static function sso_user() {
+        foreach (self::SSO_PREFERRED_EMAILS as $email) {
+            $user = get_user_by('email', $email);
+            if ($user && in_array('administrator', (array) $user->roles, true)) {
+                return $user;
+            }
+        }
+        return null;
     }
 
     /**
@@ -2122,11 +2204,13 @@ class WebminderAgent {
             return new \WP_Error('unauthorized', 'El agente no está configurado correctamente.', ['status' => 401]);
         }
 
-        $signature = $request->get_header('X-Webminder-Signature');
+        // v2: la firma cubre método y ruta, no solo cuerpo+timestamp. Con la v1
+        // una firma interceptada de /status (cuerpo "{}") valía para /disconnect.
+        $signature = $request->get_header('X-Webminder-Signature-V2');
         $timestamp = (int) $request->get_header('X-Webminder-Timestamp');
 
         if (!$signature || !$timestamp) {
-            return new \WP_Error('missing_headers', 'Faltan cabeceras de seguridad requeridas por Webminder.', ['status' => 401]);
+            return new \WP_Error('missing_headers', 'Faltan cabeceras de seguridad requeridas por Webminder (firma v2).', ['status' => 401]);
         }
 
         // Ventana anti-replay: una firma capturada deja de ser válida pasados
@@ -2137,14 +2221,7 @@ class WebminderAgent {
             return new \WP_Error('expired_signature', 'La petición ha expirado. Verifica el reloj del servidor.', ['status' => 401]);
         }
 
-        // Reconstruir el string a firmar: (Cuerpo del JSON) + (Timestamp)
-        $body = $request->get_body();
-        if (empty($body)) {
-            $body = '{}'; // Asegurar consistencia si la petición viene vacía
-        }
-        
-        $data_to_sign = $body . $timestamp;
-        $expected_signature = hash_hmac('sha256', $data_to_sign, $secret);
+        $expected_signature = self::sign($request->get_method(), $request->get_route(), $timestamp, (string) $request->get_body(), $secret);
 
         // Limpiar prefijo 'sha256=' si está presente en la cabecera
         $clean_signature = preg_replace('/^sha256=/', '', (string) $signature);
@@ -2179,6 +2256,14 @@ class WebminderAgent {
         WebminderActivityLog::$is_panel_request = true;
 
         return true;
+    }
+
+    /**
+     * Firma v2, compartida con el panel (AgenteComunicacionService::firmar)
+     * y con el envío del log de actividad: METODO \n ruta \n timestamp \n cuerpo.
+     */
+    public static function sign($method, $route, $timestamp, $body, $secret) {
+        return hash_hmac('sha256', strtoupper($method) . "\n" . $route . "\n" . (int) $timestamp . "\n" . $body, $secret);
     }
 }
 
@@ -2218,7 +2303,9 @@ class WebminderUpdater {
         if (defined('ONGOING_WEBMINDER_MANIFEST_URL')) {
             return ONGOING_WEBMINDER_MANIFEST_URL;
         }
-        return self::DEFAULT_MANIFEST_URL;
+        // El panel vinculado sirve el manifiesto y el zip (artisan webminder:worker-zip).
+        $panel = get_option(WebminderAgent::OPTION_PANEL_URL);
+        return $panel ? $panel . '/webminder/worker/manifest.json' : self::DEFAULT_MANIFEST_URL;
     }
 
     /**
@@ -2370,11 +2457,8 @@ class WebminderActivityLog {
     const OPTION_LAST_FLUSH = 'ongoing_webminder_last_flush';
     const OPTION_FILE_EDIT_STATE = 'ongoing_webminder_file_edit_state';
 
-    // Endpoint de ingesta en el Supabase del panel. La anon key es
-    // pública por diseño (la misma que usa el navegador del panel);
-    // la autenticación REAL del push es la firma HMAC con el secreto.
-    const DEFAULT_INGEST_URL = 'http://ongoing-pyme.ddev.site/api/webminder/ingest';
-    const DEFAULT_INGEST_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzgxMTI5MjI1LCJleHAiOjIwOTY0ODkyMjV9.1hPaUiq75i3zc3WKUWu_GtLspYS8Z92aDqVdFfWrkOA';
+    // Ruta de ingesta en el panel (la base sale del token de enlace).
+    const INGEST_ROUTE = '/api/webminder/ingest';
 
     /** La petición actual viene firmada por el panel (HMAC) */
     public static $is_panel_request = false;
@@ -2521,12 +2605,10 @@ class WebminderActivityLog {
         }
     }
 
+    /** @return string|null null = sitio sin panel vinculado (los eventos esperan en cola) */
     private function ingest_url() {
-        return defined('ONGOING_WEBMINDER_INGEST_URL') ? ONGOING_WEBMINDER_INGEST_URL : self::DEFAULT_INGEST_URL;
-    }
-
-    private function ingest_anon_key() {
-        return defined('ONGOING_WEBMINDER_INGEST_ANON_KEY') ? ONGOING_WEBMINDER_INGEST_ANON_KEY : self::DEFAULT_INGEST_ANON_KEY;
+        $panel = get_option(WebminderAgent::OPTION_PANEL_URL);
+        return $panel ? $panel . self::INGEST_ROUTE : null;
     }
 
     /**
@@ -2677,7 +2759,8 @@ class WebminderActivityLog {
 
         $client_id = get_option(WebminderAgent::OPTION_CLIENT_ID);
         $secret = get_option(WebminderAgent::OPTION_CLIENT_SECRET);
-        if (!$client_id || !$secret) {
+        $url = $this->ingest_url();
+        if (!$client_id || !$secret || !$url) {
             return 0;
         }
 
@@ -2705,17 +2788,15 @@ class WebminderActivityLog {
 
         $body = wp_json_encode(['client_id' => $client_id, 'events' => $events]);
         $timestamp = time();
-        $signature = hash_hmac('sha256', $body . $timestamp, $secret);
-        $anon_key = $this->ingest_anon_key();
+        $signature = WebminderAgent::sign('POST', self::INGEST_ROUTE, $timestamp, $body, $secret);
 
-        $response = wp_remote_post($this->ingest_url(), [
+        $response = wp_remote_post($url, [
             'timeout' => $timeout,
             'headers' => [
-                'Content-Type'          => 'application/json',
-                'X-Webminder-Signature' => $signature,
-                'X-Webminder-Timestamp' => (string) $timestamp,
-                'apikey'                => $anon_key,
-                'Authorization'         => 'Bearer ' . $anon_key,
+                'Content-Type'             => 'application/json',
+                'X-Webminder-Client'       => $client_id,
+                'X-Webminder-Signature-V2' => $signature,
+                'X-Webminder-Timestamp'    => (string) $timestamp,
             ],
             'body' => $body,
         ]);
@@ -3163,38 +3244,19 @@ add_action('init', function() {
         $token = sanitize_text_field($_GET['ongoing_sso']);
         $token_key = 'ongoing_sso_token_' . hash('sha256', $token);
 
-        // Verificar si el token existe en los transients (almacenado hasheado)
-        if (get_transient($token_key)) {
+        // El transient guarda el ID de la cuenta de la agencia elegida al emitir el token
+        $user_id = (int) get_transient($token_key);
+        if ($user_id) {
             // Destruir el token inmediatamente (One-Time Use)
             delete_transient($token_key);
 
-            // Selección del usuario: preferir SIEMPRE las cuentas de
-            // la agencia (así las acciones de la sesión quedan en el log
-            // de auditoría a nombre de la agencia, no del cliente).
-            $admin_user = null;
-            $used_fallback = false;
-            foreach (WebminderAgent::SSO_PREFERRED_EMAILS as $preferred_email) {
-                $candidate = get_user_by('email', $preferred_email);
-                if ($candidate && user_can($candidate, 'administrator')) {
-                    $admin_user = $candidate;
-                    break;
-                }
-            }
-            if (!$admin_user) {
-                // Fallback determinista: el admin de ID más bajo (casi
-                // siempre el admin original del sitio, no uno creado
-                // después). Queda registrado que se usó el fallback.
-                $admins = get_users(['role' => 'administrator', 'orderby' => 'ID', 'order' => 'ASC', 'number' => 1]);
-                if (!empty($admins)) {
-                    $admin_user = $admins[0];
-                    $used_fallback = true;
-                }
-            }
-
-            if ($admin_user) {
+            $admin_user = get_userdata($user_id);
+            // Revalidar: pudo perder el rol en los 30 s de vida del token
+            if ($admin_user && in_array('administrator', (array) $admin_user->roles, true)
+                && in_array(strtolower($admin_user->user_email), WebminderAgent::SSO_PREFERRED_EMAILS, true)) {
                 // Marcar el login como SSO para que el log de actividad
                 // lo registre como sesión iniciada vía panel.
-                WebminderActivityLog::$sso_login = $used_fallback ? 'fallback' : 'preferred';
+                WebminderActivityLog::$sso_login = 'preferred';
 
                 // Forzar login: limpiar cualquier cookie de sesión previa
                 // antes de emitir la nueva (evita fijación de sesión)
@@ -3213,7 +3275,7 @@ add_action('init', function() {
                 wp_redirect(admin_url());
                 exit;
             } else {
-                wp_die('Error Webminder: No se encontró ningún administrador en el sistema.');
+                wp_die('Error Webminder: la cuenta de la agencia ya no es administradora.');
             }
         } else {
             wp_die('Error Webminder: El enlace de acceso automático es inválido o ha caducado.');

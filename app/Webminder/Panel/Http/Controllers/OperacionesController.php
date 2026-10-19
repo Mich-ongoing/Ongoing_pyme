@@ -7,109 +7,87 @@ use App\Webminder\Panel\Services\AgenteComunicacionService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Validation\Rule;
 
 class OperacionesController
 {
-    protected AgenteComunicacionService $agente;
+    // Lo que acepta el worker en /db-clean (whitelist propia allí también).
+    public const ITEMS_LIMPIEZA = ['revisions', 'spam_comments', 'trashed_comments', 'transients', 'auto_drafts', 'trashed_posts', 'optimize_tables'];
 
-    public function __construct(AgenteComunicacionService $agente)
+    public function __construct(protected AgenteComunicacionService $agente)
     {
-        $this->agente = $agente;
     }
 
-    /**
-     * Activar mantenimiento
-     */
     public function activarMantenimiento(SitioWeb $sitio): RedirectResponse
     {
-        $resultado = $this->agente->activarMantenimiento($sitio);
-
-        if ($resultado['success'] ?? false) {
-            $sitio->update(['estado' => 'mantenimiento']);
-            $this->agente->obtenerStatus($sitio);
-
-            return back()->with('success', 'Modo mantenimiento activado correctamente en el sitio.');
-        }
-
-        return back()->with('error', 'Error al activar modo mantenimiento: ' . ($resultado['error'] ?? 'Respuesta inválida'));
+        return $this->cambiarMantenimiento($sitio, true);
     }
 
-    /**
-     * Desactivar mantenimiento
-     */
     public function desactivarMantenimiento(SitioWeb $sitio): RedirectResponse
     {
-        $resultado = $this->agente->desactivarMantenimiento($sitio);
-
-        if ($resultado['success'] ?? false) {
-            $sitio->update(['estado' => 'online']);
-            $this->agente->obtenerStatus($sitio);
-
-            return back()->with('success', 'Modo mantenimiento desactivado correctamente.');
-        }
-
-        return back()->with('error', 'Error al desactivar modo mantenimiento: ' . ($resultado['error'] ?? 'Respuesta inválida'));
+        return $this->cambiarMantenimiento($sitio, false);
     }
 
-    /**
-     * Limpiar BD
-     */
+    private function cambiarMantenimiento(SitioWeb $sitio, bool $activar): RedirectResponse
+    {
+        $resultado = $activar ? $this->agente->activarMantenimiento($sitio) : $this->agente->desactivarMantenimiento($sitio);
+
+        if (!$resultado['success']) {
+            return back()->with('error', 'No se pudo cambiar el modo mantenimiento: ' . $resultado['error']);
+        }
+        $this->agente->obtenerStatus($sitio);
+
+        return back()->with('success', $activar ? 'Modo mantenimiento activado.' : 'Modo mantenimiento desactivado.');
+    }
+
     public function limpiarBD(Request $request, SitioWeb $sitio): JsonResponse
     {
-        $opciones = $request->validate([
-            'clean_revisions' => 'boolean',
-            'clean_spam' => 'boolean',
-            'clean_orphaned_meta' => 'boolean',
-            'clean_trash' => 'boolean',
-            'optimize_tables' => 'boolean',
+        $validado = $request->validate([
+            'items' => ['required', 'array', 'min:1'],
+            'items.*' => [Rule::in(self::ITEMS_LIMPIEZA)],
         ]);
 
-        $resultado = $this->agente->limpiarBD($sitio, $opciones);
-
-        return response()->json($resultado);
+        return response()->json($this->agente->limpiarBD($sitio, $validado['items']));
     }
 
-    /**
-     * Obtener actualizaciones
-     */
-    public function actualizaciones(SitioWeb $sitio): JsonResponse
+    public function actualizaciones(Request $request, SitioWeb $sitio): JsonResponse
     {
-        $resultado = $this->agente->obtenerActualizaciones($sitio);
-
-        return response()->json($resultado);
+        return response()->json($this->agente->obtenerActualizaciones($sitio, $request->boolean('refrescar')));
     }
 
-    /**
-     * Ejecutar actualización
-     */
     public function actualizar(Request $request, SitioWeb $sitio): JsonResponse
     {
-        $paquete = $request->string('paquete')->required();
+        $validado = $request->validate([
+            'tipo' => ['required', Rule::in(['plugin', 'theme', 'translation'])],
+            'item' => ['required', 'string', 'max:255'],
+        ]);
 
-        $resultado = $this->agente->ejecutarActualizacion($sitio, $paquete);
-
-        return response()->json($resultado);
+        return response()->json($this->agente->ejecutarActualizacion($sitio, $validado['tipo'], $validado['item']));
     }
 
-    /**
-     * Corregir seguridad
-     */
     public function corregirSeguridad(Request $request, SitioWeb $sitio): JsonResponse
     {
-        $problema = $request->string('problema')->required();
+        $validado = $request->validate(['problema' => ['required', Rule::in(['file_edit'])]]);
 
-        $resultado = $this->agente->corregirSeguridad($sitio, $problema);
+        return response()->json($this->agente->corregirSeguridad($sitio, $validado['problema']));
+    }
 
-        return response()->json($resultado);
+    public function reporteSalud(SitioWeb $sitio): JsonResponse
+    {
+        return response()->json($this->agente->obtenerSaludCompleta($sitio));
     }
 
     /**
-     * Obtener reporte de salud completo
+     * Acceso 1-clic al wp-admin con la cuenta de la agencia.
      */
-    public function reporteSalud(SitioWeb $sitio): JsonResponse
+    public function sso(SitioWeb $sitio): RedirectResponse
     {
-        $resultado = $this->agente->obtenerSaludCompleta($sitio);
+        $resultado = $this->agente->sso($sitio);
 
-        return response()->json($resultado);
+        if (!$resultado['success'] || empty($resultado['login_url'])) {
+            return back()->with('error', 'No se pudo abrir el acceso: ' . ($resultado['error'] ?? 'sin enlace'));
+        }
+
+        return redirect()->away($resultado['login_url']);
     }
 }
