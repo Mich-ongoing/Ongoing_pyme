@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     1.25
+ * Version:     2.0.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '1.25';
+    const VERSION = '2.0.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -74,6 +74,8 @@ class WebminderAgent {
     // URL base del panel que vinculó el sitio (viene en el token de enlace).
     // De ella salen la ingesta del log y el manifiesto de autoactualización.
     const OPTION_PANEL_URL = 'ongoing_webminder_panel_url';
+    const OPTION_UPDATE_LOCK = 'ongoing_webminder_update_lock';
+    const OPTION_BACKUP_DIR = 'ongoing_webminder_backup_dir';
 
     public function __construct() {
         register_activation_hook(__FILE__, [$this, 'activate']);
@@ -100,6 +102,16 @@ class WebminderAgent {
 
         // Interceptar tráfico para mostrar página de mantenimiento
         add_action('template_redirect', [$this, 'check_maintenance_mode']);
+
+        // Sonda del chequeo post-actualización: si llega aquí, el admin cargó todos los plugins sin fatal
+        add_action('wp_ajax_nopriv_webminder_probe', [$this, 'ajax_probe']);
+        add_action('wp_ajax_webminder_probe', [$this, 'ajax_probe']);
+    }
+
+    public function ajax_probe() {
+        nocache_headers();
+        echo 'webminder-ok';
+        exit;
     }
 
     /**
@@ -415,6 +427,18 @@ class WebminderAgent {
             'permission_callback' => [$this, 'verify_signature']
         ]);
 
+        register_rest_route(self::API_NAMESPACE, '/backup-db', [
+            'methods'             => 'POST',
+            'callback'            => [$this, 'handle_backup_db'],
+            'permission_callback' => [$this, 'verify_signature']
+        ]);
+
+        register_rest_route(self::API_NAMESPACE, '/security-scan', [
+            'methods'             => 'POST',
+            'callback'            => [$this, 'handle_security_scan'],
+            'permission_callback' => [$this, 'verify_signature']
+        ]);
+
         register_rest_route(self::API_NAMESPACE, '/rotate', [
             'methods'             => 'POST',
             'callback'            => [$this, 'handle_rotate'],
@@ -484,6 +508,111 @@ class WebminderAgent {
         delete_option(self::OPTION_CLIENT_ID);
         delete_option(self::OPTION_CLIENT_SECRET);
         delete_option(self::OPTION_PANEL_URL);
+    }
+
+    /**
+     * Copia de la BD (tablas con el prefijo del sitio) antes de un lote de
+     * actualizaciones. Se guarda en la carpeta oculta de copias; se conservan
+     * las 3 últimas. Restaurar: wp db import <archivo> (a mano, a conciencia:
+     * pisa pedidos/formularios recibidos desde la copia).
+     */
+    public function handle_backup_db(\WP_REST_Request $request) {
+        global $wpdb;
+        if (!function_exists('gzopen')) {
+            return new \WP_Error('no_zlib', 'PHP sin zlib: no se puede comprimir la copia.', ['status' => 500]);
+        }
+        @set_time_limit(0);
+        $dir = self::backup_dir();
+        $file = $dir . '/db-' . gmdate('Ymd-His') . '-' . bin2hex(random_bytes(4)) . '.sql.gz';
+        $gz = gzopen($file, 'wb6');
+        if (!$gz) {
+            return new \WP_Error('write_error', 'No se pudo crear el archivo de copia.', ['status' => 500]);
+        }
+        try {
+            gzwrite($gz, "-- Webminder " . self::VERSION . " " . gmdate('c') . "\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n");
+            foreach ($this->prefix_tables() as $table) {
+                $q = '`' . str_replace('`', '``', $table) . '`';
+                $create = $wpdb->get_row("SHOW CREATE TABLE $q", ARRAY_N);
+                if (empty($create[1])) {
+                    continue; // vistas u objetos raros: fuera
+                }
+                gzwrite($gz, "\nDROP TABLE IF EXISTS $q;\n" . $create[1] . ";\n");
+                // Por lotes: nunca cargar una tabla entera en memoria
+                for ($offset = 0; ; $offset += 500) {
+                    $rows = $wpdb->get_results("SELECT * FROM $q LIMIT $offset, 500", ARRAY_N);
+                    if (empty($rows)) {
+                        break;
+                    }
+                    $values = [];
+                    foreach ($rows as $row) {
+                        $values[] = '(' . implode(',', array_map(function ($v) use ($wpdb) {
+                            // _real_escape cambia los % por un marcador de prepare(): deshacerlo o la copia sale corrupta
+                            return $v === null ? 'NULL' : "'" . $wpdb->remove_placeholder_escape($wpdb->_real_escape($v)) . "'";
+                        }, $row)) . ')';
+                    }
+                    gzwrite($gz, "INSERT INTO $q VALUES\n" . implode(",\n", $values) . ";\n");
+                }
+            }
+            gzwrite($gz, "SET FOREIGN_KEY_CHECKS=1;\n");
+            gzclose($gz);
+        } catch (\Throwable $e) {
+            @gzclose($gz);
+            @unlink($file);
+            return new \WP_Error('dump_error', 'Copia de BD fallida: ' . $e->getMessage(), ['status' => 500]);
+        }
+
+        $dumps = glob($dir . '/db-*.sql.gz') ?: [];
+        rsort($dumps); // nombre con fecha: orden lexicográfico = cronológico
+        foreach (array_slice($dumps, 3) as $old) {
+            @unlink($old);
+        }
+
+        return rest_ensure_response([
+            'success' => true,
+            'file'    => str_replace(ABSPATH, '', $file),
+            'size'    => filesize($file),
+            'message' => 'Copia de la base de datos creada.',
+        ]);
+    }
+
+    /**
+     * Estado de Cerrojo (mu-plugin de seguridad propio) si está instalado.
+     * @return array<string,mixed>
+     */
+    private function cerrojo_info() {
+        if (!function_exists('cerrojo_vigilancia')) {
+            return ['installed' => false];
+        }
+        $file = (new \ReflectionFunction('cerrojo_vigilancia'))->getFileName();
+        $head = get_file_data($file, ['Version' => 'Version']);
+        return [
+            'installed'  => true,
+            'version'    => $head['Version'],
+            'mu_plugin'  => strpos(wp_normalize_path($file), wp_normalize_path(WPMU_PLUGIN_DIR)) === 0,
+            'pending'    => (int) get_option('cerrojo_pendientes'),
+        ];
+    }
+
+    /**
+     * Revisión completa de Cerrojo lanzada desde el panel. SOLO lectura: la
+     * limpieza y la cuarentena siguen siendo manuales en Herramientas → Cerrojo,
+     * igual que en su revisión diaria (no tocar archivos legítimos a ciegas).
+     */
+    public function handle_security_scan(\WP_REST_Request $request) {
+        if (!function_exists('cerrojo_escanear') || !function_exists('cerrojo_vigilancia')) {
+            return new \WP_Error('no_cerrojo', 'Cerrojo no está instalado en este sitio.', ['status' => 404]);
+        }
+        @set_time_limit(0);
+        if (function_exists('wp_raise_memory_limit')) {
+            wp_raise_memory_limit('admin');
+        }
+        $findings = array_merge(cerrojo_escanear(false), array_map('cerrojo_texto', cerrojo_vigilancia()));
+        update_option('cerrojo_pendientes', count($findings), false);
+        return rest_ensure_response([
+            'success'  => true,
+            'cerrojo'  => $this->cerrojo_info(),
+            'findings' => array_values(array_map('strval', $findings)),
+        ]);
     }
 
     /**
@@ -663,6 +792,9 @@ class WebminderAgent {
 
         if (in_array('revisions', $items_to_clean)) {
             $wpdb->query("DELETE FROM $wpdb->posts WHERE post_type = 'revision'");
+            // Sin esto queda la postmeta de cada revisión (con Elementor, _elementor_data: lo que más ocupa)
+            $wpdb->query("DELETE pm FROM $wpdb->postmeta pm LEFT JOIN $wpdb->posts p ON p.ID = pm.post_id WHERE p.ID IS NULL");
+            $wpdb->query("DELETE tr FROM $wpdb->term_relationships tr LEFT JOIN $wpdb->posts p ON p.ID = tr.object_id LEFT JOIN $wpdb->links l ON l.link_id = tr.object_id WHERE p.ID IS NULL AND l.link_id IS NULL");
             $cleaned[] = 'revisions';
         }
 
@@ -674,6 +806,10 @@ class WebminderAgent {
         if (in_array('trashed_comments', $items_to_clean)) {
             $wpdb->query("DELETE FROM $wpdb->comments WHERE comment_approved = 'trash'");
             $cleaned[] = 'trashed_comments';
+        }
+
+        if (array_intersect(['spam_comments', 'trashed_comments'], $items_to_clean)) {
+            $wpdb->query("DELETE cm FROM $wpdb->commentmeta cm LEFT JOIN $wpdb->comments c ON c.comment_ID = cm.comment_id WHERE c.comment_ID IS NULL");
         }
 
         if (in_array('transients', $items_to_clean)) {
@@ -743,7 +879,10 @@ class WebminderAgent {
         // Comparación estricta: solo el booleano true activa el modo
         $active = isset($params['active']) && true === $params['active'];
         
+ 
         update_option('ongoing_webminder_maintenance_mode', $active);
+        // Sin purga, la caché de página seguiría sirviendo la web (o la pantalla de mantenimiento)
+        $this->purge_all_caches();
         
         return rest_ensure_response([
             'success' => true,
@@ -1034,6 +1173,7 @@ class WebminderAgent {
             'plugins_list' => $this->get_installed_plugins_details(),
             'environment' => $this->get_environment_info(),
             'site_health_summary' => ($site_health = $this->run_site_health()) ? ($site_health['summary'] ?? []) : [],
+            'cerrojo' => $this->cerrojo_info(),
         ];
 
         // Flush oportunista del log de actividad: aprovecha el tráfico
@@ -1747,6 +1887,15 @@ class WebminderAgent {
                 ob_end_clean();
                 return new \WP_Error('invalid_params', 'Parámetros inválidos.', ['status' => 400]);
             }
+            if (!$this->item_installed($type, $item)) {
+                ob_end_clean();
+                return new \WP_Error('unknown_item', 'Ese plugin o tema no está instalado en el sitio.', ['status' => 404]);
+            }
+            if (!$this->acquire_update_lock()) {
+                ob_end_clean();
+                return new \WP_Error('busy', 'Ya hay otra actualización en curso en este sitio. Reintenta en unos minutos.', ['status' => 409]);
+            }
+            $lock_held = true;
 
             require_once ABSPATH . 'wp-admin/includes/file.php';
             require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
@@ -1760,21 +1909,17 @@ class WebminderAgent {
             // Usar Skin silencioso
             $upgrader_skin = new \Automatic_Upgrader_Skin();
             
-            $backup_dir = WP_CONTENT_DIR . '/webminder-backups';
-            if (!file_exists($backup_dir)) {
-                wp_mkdir_p($backup_dir);
-            }
+            $backup_dir = self::backup_dir();
 
             // Purgar respaldos viejos (de procesos previos interrumpidos)
             // para que el directorio no crezca sin control.
             $this->prune_old_backups($backup_dir);
 
-            $item_slug = ($type === 'plugin') ? dirname($item) : $item;
-            if ($item_slug === '.') {
-                $item_slug = basename($item, '.php'); 
-            }
-            
-            $source_dir = ($type === 'plugin') ? WP_PLUGIN_DIR . '/' . $item_slug : get_theme_root() . '/' . $item_slug;
+            // Plugin de un solo archivo (hello.php): se copia el archivo, no una carpeta
+            $single_file = ($type === 'plugin' && dirname($item) === '.');
+            $item_slug = ($type === 'plugin') ? ($single_file ? basename($item, '.php') : dirname($item)) : $item;
+            $source_dir = $single_file ? WP_PLUGIN_DIR . '/' . $item
+                : (($type === 'plugin') ? WP_PLUGIN_DIR . '/' . $item_slug : get_theme_root() . '/' . $item_slug);
             $backup_path = $backup_dir . '/' . $item_slug . '-backup-' . time();
 
             // Inicializar WP_Filesystem de forma segura
@@ -1791,17 +1936,20 @@ class WebminderAgent {
                 $wp_filesystem = new \WP_Filesystem_Direct(null);
             }
 
+            // === true: copy_dir devuelve WP_Error (que es "truthy") si falla a medias;
+            // tomarlo por éxito haría que el rollback restaurase una copia incompleta.
             $backup_success = false;
-            if (file_exists($source_dir) && is_dir($source_dir)) {
-                $backup_success = copy_dir($source_dir, $backup_path);
+            if ($single_file && is_file($source_dir)) {
+                $backup_success = @copy($source_dir, $backup_path);
+            } elseif (is_dir($source_dir)) {
+                $backup_success = copy_dir($source_dir, $backup_path) === true;
             }
 
-            // Baseline ANTES del update: el estado HTTP de la home con la versión
-            // que funcionaba. Permite tratar un 4xx posterior como regresión SOLO
-            // si antes el sitio respondía bien (evita falsos rollbacks en sitios
-            // que legítimamente devuelven 403/401 en la home por geobloqueo/CDN).
-            $baseline = wp_remote_get(home_url(), ['timeout' => 10]);
-            $baseline_ok = !is_wp_error($baseline) && wp_remote_retrieve_response_code($baseline) < 400;
+            // Baseline ANTES del update con la versión que funcionaba: solo se
+            // juzgan después las sondas que antes daban bien (un 403 por
+            // geobloqueo o un loopback bloqueado por el host no son regresiones).
+            $check_urls = $this->check_urls(isset($params['check_urls']) ? $params['check_urls'] : []);
+            $baseline = $this->probe_site($check_urls);
 
             // Defensa del LOTE ("Actualizar Todo Seguro"): el upgrader nativo lee
             // el paquete del site transient (update_plugins/themes) y, si el ítem
@@ -1815,9 +1963,12 @@ class WebminderAgent {
             $this->ensure_pending_update_present($type, $item);
 
             $was_active = false;
+            $was_network_active = false;
+            $new_item = $item;
             if ($type === 'plugin') {
                 require_once ABSPATH . 'wp-admin/includes/plugin.php';
                 $was_active = is_plugin_active($item);
+                $was_network_active = is_multisite() && is_plugin_active_for_network($item);
                 
                 $upgrader = new \Plugin_Upgrader($upgrader_skin);
                 // clear_update_cache=false: el flujo nativo, por defecto, borra
@@ -1829,9 +1980,14 @@ class WebminderAgent {
                 // y, en éxito, retiramos el ítem a mano (forget_pending_update).
                 $result = $upgrader->upgrade($item, ['clear_update_cache' => false]);
 
+                // La ruta puede cambiar: un plugin de un solo archivo (hello.php)
+                // se instala en una carpeta (hello-dolly/hello.php).
+                if ($result === true && is_string($upgrader->plugin_info()) && $upgrader->plugin_info() !== '') {
+                    $new_item = $upgrader->plugin_info();
+                }
                 // Reactivar SOLO si la actualización fue un éxito real.
                 if ($was_active && $result === true) {
-                    activate_plugin($item, '', false, true);
+                    $this->keep_plugin_active($new_item, $was_network_active, $item);
                 }
             } else {
                 $upgrader = new \Theme_Upgrader($upgrader_skin);
@@ -1882,15 +2038,10 @@ class WebminderAgent {
                 ]);
             }
 
-            $health_check = wp_remote_get(home_url(), ['timeout' => 10]);
-            $status_code = wp_remote_retrieve_response_code($health_check);
-
-            // Rollback si: el sitio no responde / da 5xx (siempre), o da 4xx
-            // CUANDO antes respondía bien (la actualización introdujo el error).
-            // Un 4xx que ya existía antes del update no se considera regresión.
-            $health_failed = is_wp_error($health_check)
-                || $status_code >= 500
-                || ($status_code >= 400 && $baseline_ok);
+            $after = $this->probe_site($check_urls);
+            $regressions = $this->probe_regressions($baseline, $after);
+            $health_failed = !empty($regressions);
+            $verified = count(array_filter($baseline, function ($p) { return $p['ok']; })) > 0;
 
             if ($health_failed) {
                 if ($backup_success) {
@@ -1898,34 +2049,51 @@ class WebminderAgent {
                     // de borrar el backup. Si la restauración falla a medias (disco
                     // lleno, permisos, timeout) NO borramos el backup, para no dejar
                     // el directorio corrupto y sin red de recuperación (WSOD).
-                    $wp_filesystem->delete($source_dir, true);
-                    $restored = copy_dir($backup_path, $source_dir);
+                    if ($new_item !== $item && dirname($new_item) !== '.') {
+                        // Instalación nueva en otra ruta: fuera, y la vieja vuelve a su sitio
+                        $wp_filesystem->delete(WP_PLUGIN_DIR . '/' . dirname($new_item), true);
+                    }
+                    if ($single_file) {
+                        $restored = @copy($backup_path, $source_dir);
+                        wp_opcache_invalidate($source_dir, true); // copy_dir ya lo hace por archivo
+                    } else {
+                        $wp_filesystem->delete($source_dir, true);
+                        $restored = copy_dir($backup_path, $source_dir);
+                    }
 
                     // Reactivar la versión vieja si estaba activo (best-effort).
                     if ($type === 'plugin' && $was_active) {
-                        activate_plugin($item, '', false, true);
+                        $this->keep_plugin_active($item, $was_network_active, $new_item);
                     }
 
+                    // Purgar antes de cerrar el buffer: lo que imprima un plugin de caché no debe romper el JSON
+                    $this->purge_all_caches();
                     ob_end_clean();
 
                     if ($restored === true) {
                         $wp_filesystem->delete($backup_path, true);
                         return rest_ensure_response([
-                            'success' => false,
-                            'message' => "Error 500 detectado tras actualizar. Webminder ha restaurado la versión anterior con éxito."
+                            'success'     => false,
+                            'rolled_back' => true,
+                            'regressions' => $regressions,
+                            'message'     => 'El sitio falló tras actualizar (' . implode('; ', $regressions) . '). Se restauró la versión anterior.',
                         ]);
                     }
 
                     // La restauración falló: conservar el backup para recuperación manual.
                     return rest_ensure_response([
-                        'success' => false,
-                        'message' => "Error 500 tras actualizar y la restauración automática falló. El respaldo se conservó en '" . $backup_path . "' para recuperación manual."
+                        'success'     => false,
+                        'rolled_back' => false,
+                        'regressions' => $regressions,
+                        'message'     => 'El sitio falló tras actualizar y la restauración automática falló. Copia conservada en ' . str_replace(ABSPATH, '', $backup_path) . ' para recuperarla a mano.',
                     ]);
                 } else {
                     ob_end_clean();
                     return rest_ensure_response([
-                        'success' => false,
-                        'message' => "Error fatal en el sitio y el backup quirúrgico no pudo restaurarse."
+                        'success'     => false,
+                        'rolled_back' => false,
+                        'regressions' => $regressions,
+                        'message'     => 'El sitio falló tras actualizar y no había copia previa que restaurar.',
                     ]);
                 }
             }
@@ -1948,9 +2116,10 @@ class WebminderAgent {
             $debug_output = ob_get_clean();
 
             return rest_ensure_response([
-                'success' => true,
-                'message' => ucfirst($type) . " actualizado correctamente.",
-                'purged'  => $purged_caches
+                'success'  => true,
+                'message'  => ucfirst($type) . ' actualizado correctamente.',
+                'verified' => $verified, // false = ninguna sonda respondía antes: no se pudo comprobar
+                'purged'   => $purged_caches
             ]);
             
         } catch (\Throwable $e) {
@@ -1964,7 +2133,156 @@ class WebminderAgent {
                 'success' => false,
                 'message' => 'Excepción en el worker: ' . $e->getMessage()
             ]);
+        } finally {
+            if (!empty($lock_held)) {
+                delete_option(self::OPTION_UPDATE_LOCK);
+            }
         }
+    }
+
+    /* ------------------------------------------------------------------
+     * Comprobación del sitio antes/después de actualizar
+     * ---------------------------------------------------------------- */
+
+    /**
+     * Plugin_Upgrader desactiva el plugin antes de actualizar. Se devuelve a la
+     * lista de activos sin activate_plugin(), que incluye el archivo en esta
+     * petición (con la versión vieja ya cargada falla en silencio y el plugin
+     * quedaba desactivado, y las sondas probaban la web SIN la versión nueva).
+     * Es lo mismo que hacen las actualizaciones automáticas de WordPress.
+     */
+    private function keep_plugin_active($item, $network, $replaces = null) {
+        if ($network) {
+            $sitewide = (array) get_site_option('active_sitewide_plugins', []);
+            unset($sitewide[(string) $replaces]);
+            $sitewide[$item] = time();
+            update_site_option('active_sitewide_plugins', $sitewide);
+            return;
+        }
+        $active = array_diff((array) get_option('active_plugins', []), [(string) $replaces]);
+        $active[] = $item;
+        $active = array_values(array_unique($active));
+        sort($active);
+        update_option('active_plugins', $active);
+    }
+
+    /** ¿Está instalado? Impide que el panel pida rutas arbitrarias ("../"). */
+    private function item_installed($type, $item) {
+        if ($type === 'plugin') {
+            if (!function_exists('get_plugins')) {
+                require_once ABSPATH . 'wp-admin/includes/plugin.php';
+            }
+            return array_key_exists($item, get_plugins());
+        }
+        return array_key_exists($item, wp_get_themes());
+    }
+
+    /** Mutex por sitio: add_option es atómico (clave única en wp_options). */
+    private function acquire_update_lock() {
+        if (add_option(self::OPTION_UPDATE_LOCK, time(), '', 'no')) {
+            return true;
+        }
+        // Bloqueo huérfano de un proceso que murió (timeout de PHP): caduca a los 15 min
+        if (time() - (int) get_option(self::OPTION_UPDATE_LOCK) > 900) {
+            delete_option(self::OPTION_UPDATE_LOCK);
+            return add_option(self::OPTION_UPDATE_LOCK, time(), '', 'no');
+        }
+        return false;
+    }
+
+    /**
+     * Carpeta de copias con nombre impredecible: en Plesk nginx sirve los
+     * estáticos sin pasar por .htaccess, así que el "deny" no basta.
+     */
+    public static function backup_dir() {
+        $name = get_option(self::OPTION_BACKUP_DIR);
+        if (!$name || !preg_match('/^webminder-backups-[0-9a-f]{16}$/', $name)) {
+            $name = 'webminder-backups-' . bin2hex(random_bytes(8));
+            update_option(self::OPTION_BACKUP_DIR, $name, false);
+        }
+        $dir = WP_CONTENT_DIR . '/' . $name;
+        if (!is_dir($dir)) {
+            wp_mkdir_p($dir);
+            @file_put_contents($dir . '/index.php', "<?php\n// Silence is golden.\n");
+            @file_put_contents($dir . '/.htaccess', "Require all denied\nDeny from all\n");
+        }
+        // La carpeta pública de versiones < 2.0 ya no se usa
+        $legacy = WP_CONTENT_DIR . '/webminder-backups';
+        if (is_dir($legacy) && !glob($legacy . '/*-backup-*')) {
+            @rmdir($legacy);
+        }
+        return $dir;
+    }
+
+    /**
+     * URLs a comprobar: la home + las que mande el panel (mismo host, máx. 5).
+     * @return string[]
+     */
+    private function check_urls($extra) {
+        $urls = [home_url('/')];
+        $host = wp_parse_url(home_url(), PHP_URL_HOST);
+        foreach (array_slice((array) $extra, 0, 5) as $u) {
+            $u = esc_url_raw((string) $u);
+            if ($u && wp_parse_url($u, PHP_URL_HOST) === $host) {
+                $urls[] = $u;
+            }
+        }
+        return array_values(array_unique($urls));
+    }
+
+    /**
+     * Sondas: cada URL con un parámetro que evita la caché de página (si no,
+     * LiteSpeed/WP Rocket devuelven la copia buena aunque PHP esté roto) y
+     * admin-ajax, que carga todos los plugins en contexto de administración.
+     * @return array<string,array{ok:bool,code:int,why:string}>
+     */
+    private function probe_site($urls) {
+        $out = [];
+        $nonce = bin2hex(random_bytes(4));
+        $targets = [];
+        foreach ($urls as $u) {
+            $targets[$u] = add_query_arg('webminder_check', $nonce, $u);
+        }
+        $targets['admin-ajax'] = add_query_arg(['action' => 'webminder_probe', 'webminder_check' => $nonce], admin_url('admin-ajax.php'));
+
+        foreach ($targets as $label => $url) {
+            $r = wp_remote_get($url, [
+                'timeout'     => 20,
+                'redirection' => 3,
+                'sslverify'   => false, // loopback: algunos hosts no validan su propio certificado
+                'headers'     => ['Cache-Control' => 'no-cache', 'Pragma' => 'no-cache'],
+            ]);
+            if (is_wp_error($r)) {
+                $out[$label] = ['ok' => false, 'code' => 0, 'why' => $r->get_error_message()];
+                continue;
+            }
+            $code = (int) wp_remote_retrieve_response_code($r);
+            $body = (string) wp_remote_retrieve_body($r);
+            $why = '';
+            if ($code >= 400) {
+                $why = 'HTTP ' . $code;
+            } elseif ($label === 'admin-ajax' && trim($body) !== 'webminder-ok') {
+                $why = 'el admin no arranca';
+            } elseif (preg_match('/There has been a critical error|Ha habido un error crítico|<b>(Fatal|Parse) error<\/b>/i', $body)) {
+                $why = 'error crítico de WordPress en la página';
+            }
+            $out[$label] = ['ok' => $why === '', 'code' => $code, 'why' => $why];
+        }
+        return $out;
+    }
+
+    /**
+     * Regresiones = sondas que antes daban bien y ahora no.
+     * @return string[]
+     */
+    private function probe_regressions($before, $after) {
+        $out = [];
+        foreach ($before as $label => $b) {
+            if ($b['ok'] && isset($after[$label]) && !$after[$label]['ok']) {
+                $out[] = ($label === 'admin-ajax' ? 'wp-admin' : $label) . ': ' . $after[$label]['why'];
+            }
+        }
+        return $out;
     }
 
     /* ------------------------------------------------------------------
@@ -2644,23 +2962,10 @@ class WebminderActivityLog {
      * IP real del visitante, considerando Cloudflare y proxies.
      */
     private function get_ip() {
-        $candidates = [];
-        if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
-            $candidates[] = trim($_SERVER['HTTP_CF_CONNECTING_IP']);
-        }
-        if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            $parts = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
-            $candidates[] = trim($parts[0]);
-        }
-        if (!empty($_SERVER['REMOTE_ADDR'])) {
-            $candidates[] = trim($_SERVER['REMOTE_ADDR']);
-        }
-        foreach ($candidates as $ip) {
-            if (filter_var($ip, FILTER_VALIDATE_IP)) {
-                return $ip;
-            }
-        }
-        return null;
+        // shortcut: solo REMOTE_ADDR; CF-Connecting-IP / X-Forwarded-For los falsea cualquiera.
+        // Si un sitio va detrás de Cloudflare, validar REMOTE_ADDR contra sus rangos antes de confiar en la cabecera.
+        $ip = isset($_SERVER['REMOTE_ADDR']) ? trim($_SERVER['REMOTE_ADDR']) : '';
+        return filter_var($ip, FILTER_VALIDATE_IP) ? $ip : null;
     }
 
     /**

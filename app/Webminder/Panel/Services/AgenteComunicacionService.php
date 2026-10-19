@@ -36,7 +36,9 @@ class AgenteComunicacionService
 
         $secreto ??= $credencial->client_secret;
         $ruta = self::API . $endpoint;
-        $cuerpo = json_encode($payload ?: new \stdClass());
+        // Nonce: dos peticiones iguales en el mismo segundo (doble clic) tendrían la misma
+        // firma y el worker rechazaría la segunda como replay. El worker ignora el campo.
+        $cuerpo = json_encode($payload + ['_nonce' => bin2hex(random_bytes(8))]);
         $timestamp = time();
 
         try {

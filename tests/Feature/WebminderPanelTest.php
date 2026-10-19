@@ -52,7 +52,8 @@ class WebminderPanelTest extends TestCase
             $esperada = hash_hmac('sha256', "POST\n/webminder/v1/update\n{$ts}\n" . $req->body(), $this->secreto);
 
             return $req->url() === 'https://acme.test/wp-json/webminder/v1/update'
-                && $req->data() === ['type' => 'plugin', 'item' => 'akismet/akismet.php']
+                && $req['type'] === 'plugin' && $req['item'] === 'akismet/akismet.php'
+                && strlen($req['_nonce']) === 16
                 && $req->header('X-Webminder-Signature-V2')[0] === $esperada;
         });
     }
