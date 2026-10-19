@@ -45,9 +45,11 @@ class ActualizarSitio implements ShouldQueue
         }
         $sitio = $ejecucion->sitio;
         $ejecucion->update(['estado' => 'en_curso', 'iniciada_en' => now()]);
+        $progreso = fn (string $texto) => $ejecucion->update(['progreso' => $texto]);
 
         if ($ejecucion->copia_bd) {
-            $copia = $agente->peticionLarga($sitio, 'backup-db', [], 1200);
+            $ejecucion->update(['progreso' => 'Copiando la base de datos…']);
+            $copia = $agente->peticionLarga($sitio, 'backup-db', [], 1800, $progreso);
             if (!$copia['success']) {
                 $this->terminar($ejecucion, 'interrumpida', 'No se pudo copiar la base de datos; no se ha actualizado nada: ' . $copia['error']);
 
@@ -59,7 +61,8 @@ class ActualizarSitio implements ShouldQueue
         $errores = 0;
         foreach ($ejecucion->items as $i => $item) {
             $ejecucion->marcarItem($i, 'en_curso');
-            $r = $agente->ejecutarActualizacion($sitio, $item['tipo'], $item['item']);
+            $ejecucion->update(['progreso' => "Actualizando {$item['nombre']}…"]);
+            $r = $agente->ejecutarActualizacion($sitio, $item['tipo'], $item['item'], [], $progreso);
 
             if ($r['success']) {
                 $ejecucion->marcarItem($i, ($r['verified'] ?? true) ? 'ok' : 'ok_sin_verificar', $r['message'] ?? null);
@@ -96,6 +99,6 @@ class ActualizarSitio implements ShouldQueue
 
     private function terminar(Ejecucion $ejecucion, string $estado, ?string $error = null): void
     {
-        $ejecucion->update(['estado' => $estado, 'error' => $error, 'terminada_en' => now()]);
+        $ejecucion->update(['estado' => $estado, 'error' => $error, 'progreso' => null, 'terminada_en' => now()]);
     }
 }

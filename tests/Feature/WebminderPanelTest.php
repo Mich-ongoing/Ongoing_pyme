@@ -226,6 +226,25 @@ class WebminderPanelTest extends TestCase
         Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/backup-db') && strlen($r->data()['job'] ?? '') === 32);
     }
 
+    public function test_si_el_sitio_deja_de_avanzar_el_lote_se_detiene_con_su_progreso(): void
+    {
+        Http::fake(function (Request $req) {
+            return str_ends_with($req->url(), '/job')
+                ? Http::response(['success' => true, 'status' => 'running', 'started' => 1000, 'beat' => 1000, 'now' => 1400, 'progress' => 'Copiando wp_simple_history (120.000 filas)'])
+                : Http::response(['success' => true, 'status' => 'running', 'job' => 'x']);
+        });
+        $e = $this->lote(['a/a.php']);
+
+        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class));
+
+        $e->refresh();
+        $this->assertSame('interrumpida', $e->estado);
+        $this->assertStringContainsString('dejó de avanzar', $e->error);
+        $this->assertStringContainsString('wp_simple_history', $e->error);
+        $this->assertNull($e->progreso);
+        $this->assertCount(1, Http::recorded(fn (Request $r) => str_ends_with($r->url(), '/job')));
+    }
+
     public function test_un_worker_sin_job_devuelve_su_respuesta_directa(): void
     {
         Http::fake(function (Request $req) {

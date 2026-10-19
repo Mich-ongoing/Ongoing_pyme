@@ -83,7 +83,7 @@ class AgenteComunicacionService
      * tener el resultado. Cloudflare corta a los 100 s cualquier petición (HTTP 524).
      * Un worker anterior ignora 'job' y contesta con el resultado directamente.
      */
-    public function peticionLarga(SitioWeb $sitio, string $endpoint, array $payload, int $limite): array
+    public function peticionLarga(SitioWeb $sitio, string $endpoint, array $payload, int $limite, ?callable $alProgresar = null): array
     {
         $job = Str::random(32);
         $inicio = $this->hacerPeticion($sitio, $endpoint, $payload + ['job' => $job], null, 90);
@@ -115,6 +115,15 @@ class AgenteComunicacionService
                     : EventoAuditoria::registrarError('webminder_' . $endpoint, "Resultado de {$endpoint}", (string) $resultado['error'], $sitio->id, $resumen);
 
                 return $resultado;
+            }
+            if (($estado['status'] ?? null) === 'running') {
+                if ($alProgresar && isset($estado['progress'])) {
+                    $alProgresar((string) $estado['progress']);
+                }
+                // Sin latido en 5 min el proceso murió en el sitio (lo mató el hosting): no esperar al límite
+                if (isset($estado['beat'], $estado['now']) && $estado['now'] - $estado['beat'] > 300) {
+                    return ['success' => false, 'error' => "Sin conexión: el proceso de {$endpoint} dejó de avanzar en el sitio (" . ($estado['progress'] ?? 'sin progreso') . '). Revisa el sitio antes de seguir.'];
+                }
             }
             if (($estado['status'] ?? null) === 'unknown' && ++$desconocido >= 3) {
                 return $inicio; // nunca llegó a arrancar
@@ -227,9 +236,9 @@ class AgenteComunicacionService
     /**
      * Actualiza un ítem. $tipo: plugin|theme|translation; $item: "carpeta/archivo.php" o slug del tema.
      */
-    public function ejecutarActualizacion(SitioWeb $sitio, string $tipo, string $item, array $extra = []): array
+    public function ejecutarActualizacion(SitioWeb $sitio, string $tipo, string $item, array $extra = [], ?callable $alProgresar = null): array
     {
-        return $this->peticionLarga($sitio, 'update', ['type' => $tipo, 'item' => $item] + $extra, 900);
+        return $this->peticionLarga($sitio, 'update', ['type' => $tipo, 'item' => $item] + $extra, 900, $alProgresar);
     }
 
     public function obtenerPaquetes(SitioWeb $sitio): array

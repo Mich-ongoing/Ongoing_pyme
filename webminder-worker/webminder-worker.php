@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.1.0
+ * Version:     2.1.1
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.1.0';
+    const VERSION = '2.1.1';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -541,16 +541,31 @@ class WebminderAgent {
         }
         try {
             gzwrite($gz, "-- Webminder " . self::VERSION . " " . gmdate('c') . "\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n");
-            foreach ($this->prefix_tables() as $table) {
+            $tables = $this->prefix_tables();
+            foreach ($tables as $n => $table) {
+                $this->job_progress(sprintf('Copiando %s (tabla %d de %d)', $table, $n + 1, count($tables)), true);
                 $q = '`' . str_replace('`', '``', $table) . '`';
                 $create = $wpdb->get_row("SHOW CREATE TABLE $q", ARRAY_N);
                 if (empty($create[1])) {
                     continue; // vistas u objetos raros: fuera
                 }
                 gzwrite($gz, "\nDROP TABLE IF EXISTS $q;\n" . $create[1] . ";\n");
-                // Por lotes: nunca cargar una tabla entera en memoria
-                for ($offset = 0; ; $offset += 500) {
-                    $rows = $wpdb->get_results("SELECT * FROM $q LIMIT $offset, 500", ARRAY_N);
+                // Por lotes y por clave primaria: con LIMIT offset cada lote relee las filas
+                // anteriores y una tabla de logs grande tardaba decenas de minutos
+                $pk = $wpdb->get_col("SHOW KEYS FROM $q WHERE Key_name = 'PRIMARY'", 4);
+                $pk = count($pk) === 1 ? '`' . str_replace('`', '``', $pk[0]) . '`' : null;
+                $last = null;
+                $done = 0;
+                for ($offset = 0; ; $offset += 1000) {
+                    if ($pk) {
+                        $where = $last === null ? '' : $wpdb->prepare(" WHERE $pk > %s", $last);
+                        $rows = $wpdb->get_results("SELECT * FROM $q$where ORDER BY $pk LIMIT 1000", ARRAY_A);
+                    } else {
+                        $rows = $wpdb->get_results("SELECT * FROM $q LIMIT $offset, 1000", ARRAY_A);
+                    }
+                    if ($wpdb->last_error) {
+                        throw new \RuntimeException("$table: " . $wpdb->last_error);
+                    }
                     if (empty($rows)) {
                         break;
                     }
@@ -559,9 +574,14 @@ class WebminderAgent {
                         $values[] = '(' . implode(',', array_map(function ($v) use ($wpdb) {
                             // _real_escape cambia los % por un marcador de prepare(): deshacerlo o la copia sale corrupta
                             return $v === null ? 'NULL' : "'" . $wpdb->remove_placeholder_escape($wpdb->_real_escape($v)) . "'";
-                        }, $row)) . ')';
+                        }, array_values($row))) . ')';
+                    }
+                    if ($pk) {
+                        $last = end($rows)[trim($pk, '`')];
                     }
                     gzwrite($gz, "INSERT INTO $q VALUES\n" . implode(",\n", $values) . ";\n");
+                    $done += count($rows);
+                    $this->job_progress(sprintf('Copiando %s (%s filas)', $table, number_format_i18n($done)));
                 }
             }
             gzwrite($gz, "SET FOREIGN_KEY_CHECKS=1;\n");
@@ -593,6 +613,26 @@ class WebminderAgent {
      * El panel recoge el resultado en /job. Sin 'job' (panel < 2.1): síncrono.
      * @return \WP_REST_Response|null
      */
+    /** @var string|null Job en curso en este proceso (para job_progress) */
+    private $current_job = null;
+    private $last_beat = 0;
+
+    /**
+     * Latido y texto de progreso del job en curso. El panel lo muestra y, si el
+     * latido se para 5 min, da el proceso por muerto en vez de esperar al límite.
+     */
+    private function job_progress($text, $force = false) {
+        if (!$this->current_job || (!$force && time() - $this->last_beat < 5)) {
+            return;
+        }
+        $this->last_beat = time();
+        $name = self::OPTION_JOB_PREFIX . $this->current_job;
+        $state = get_option($name);
+        if (is_array($state) && $state['status'] === 'running') {
+            update_option($name, ['progress' => $text, 'beat' => time()] + $state, false);
+        }
+    }
+
     private function in_background(\WP_REST_Request $request, $method) {
         $params = (array) $request->get_json_params();
         $job = (string) ($params['job'] ?? '');
@@ -600,7 +640,7 @@ class WebminderAgent {
             return null;
         }
         $this->prune_jobs();
-        if (!add_option(self::OPTION_JOB_PREFIX . $job, ['status' => 'running', 'started' => time()], '', 'no')) {
+        if (!add_option(self::OPTION_JOB_PREFIX . $job, ['status' => 'running', 'started' => time(), 'beat' => time()], '', 'no')) {
             return new \WP_Error('job_exists', 'Ese trabajo ya existe.', ['status' => 409]);
         }
         unset($params['job']);
@@ -628,6 +668,7 @@ class WebminderAgent {
                     ]], false);
                 }
             });
+            $this->current_job = $job;
             try {
                 $r = $this->$method($sync);
                 $result = is_wp_error($r)
@@ -649,7 +690,8 @@ class WebminderAgent {
         if (!is_array($state)) {
             return rest_ensure_response(['success' => true, 'status' => 'unknown']);
         }
-        return rest_ensure_response(['success' => true] + $state);
+        // 'now': el panel compara el latido con el reloj del sitio, no con el suyo
+        return rest_ensure_response(['success' => true, 'now' => time()] + $state);
     }
 
     /** Fuera los resultados de más de un día: el panel los recoge en minutos. */
@@ -2042,6 +2084,7 @@ class WebminderAgent {
 
             // === true: copy_dir devuelve WP_Error (que es "truthy") si falla a medias;
             // tomarlo por éxito haría que el rollback restaurase una copia incompleta.
+            $this->job_progress('Guardando copia de los archivos actuales', true);
             $backup_success = false;
             if ($single_file && is_file($source_dir)) {
                 $backup_success = @copy($source_dir, $backup_path);
@@ -2053,7 +2096,9 @@ class WebminderAgent {
             // juzgan después las sondas que antes daban bien (un 403 por
             // geobloqueo o un loopback bloqueado por el host no son regresiones).
             $check_urls = $this->check_urls(isset($params['check_urls']) ? $params['check_urls'] : []);
+            $this->job_progress('Comprobando la web antes de actualizar', true);
             $baseline = $this->probe_site($check_urls);
+            $this->job_progress('Descargando e instalando la versión nueva', true);
 
             // Defensa del LOTE ("Actualizar Todo Seguro"): el upgrader nativo lee
             // el paquete del site transient (update_plugins/themes) y, si el ítem
@@ -2142,6 +2187,7 @@ class WebminderAgent {
                 ]);
             }
 
+            $this->job_progress('Comprobando la web después de actualizar', true);
             $after = $this->probe_site($check_urls);
             $regressions = $this->probe_regressions($baseline, $after);
             $health_failed = !empty($regressions);
@@ -2157,6 +2203,7 @@ class WebminderAgent {
                         // Instalación nueva en otra ruta: fuera, y la vieja vuelve a su sitio
                         $wp_filesystem->delete(WP_PLUGIN_DIR . '/' . dirname($new_item), true);
                     }
+                    $this->job_progress('La web falló: volviendo a la versión anterior', true);
                     if ($single_file) {
                         $restored = @copy($backup_path, $source_dir);
                         wp_opcache_invalidate($source_dir, true); // copy_dir ya lo hace por archivo
