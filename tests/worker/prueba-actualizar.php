@@ -67,7 +67,7 @@ $home_ok = function () {
 $tmp = get_temp_dir();
 
 echo "1) Plugin de wordpress.org\n";
-WP_CLI::runcommand('plugin install classic-editor --version=1.6.5 --activate --quiet');
+WP_CLI::runcommand('plugin install classic-editor --version=1.6.5 --force --activate --quiet');
 wp_cache_delete('alloptions', 'options');
 $antes = $version('classic-editor/classic-editor.php');
 $r = $actualizar('plugin', 'classic-editor/classic-editor.php');

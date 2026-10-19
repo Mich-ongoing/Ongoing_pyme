@@ -7,6 +7,16 @@ use App\Webminder\Panel\Http\Controllers\SitiosController;
 use App\Webminder\Panel\Http\Controllers\OperacionesController;
 use App\Webminder\Panel\Http\Controllers\AuditoriaController;
 use App\Webminder\Panel\Http\Controllers\IngestaController;
+use App\Webminder\Panel\Http\Controllers\ActualizacionesController;
+
+// Autoactualización del worker: manifiesto y zip (artisan webminder:worker-zip). Públicos: no llevan secretos.
+Route::get('webminder/worker/{archivo}', function (string $archivo) {
+    abort_unless(in_array($archivo, ['manifest.json', 'webminder-worker.zip'], true), 404);
+    $ruta = storage_path('app/worker/' . $archivo);
+    abort_unless(is_file($ruta), 404);
+
+    return response()->file($ruta, ['Cache-Control' => 'no-cache']);
+})->name('webminder.worker');
 
 // Ingesta del log de actividad de los workers: sin sesión ni CSRF, autenticada por firma HMAC.
 Route::post('api/webminder/ingest', IngestaController::class)->middleware('throttle:120,1')->name('webminder.ingest');
@@ -33,6 +43,11 @@ Route::prefix('webminder-panel')->name('webminder-panel.')->middleware(['web', '
     Route::get('/sitios/{sitio}/credenciales', [SitiosController::class, 'credenciales'])->name('sitios.credenciales');
     Route::post('/sitios/{sitio}/desconectar', [SitiosController::class, 'desconectar'])->name('sitios.desconectar');
 
+    // Actualizaciones en lote (cola)
+    Route::get('/sitios/{sitio}/actualizaciones', [ActualizacionesController::class, 'index'])->name('sitios.actualizaciones');
+    Route::post('/sitios/{sitio}/actualizaciones', [ActualizacionesController::class, 'store'])->name('sitios.actualizaciones.store');
+    Route::get('/ejecuciones/{ejecucion}', [ActualizacionesController::class, 'show'])->name('ejecuciones.show');
+
     // Operaciones remotas
     Route::post('/operaciones/{sitio}/mantenimiento-on', [OperacionesController::class, 'activarMantenimiento'])->name('operaciones.mantenimiento-on');
     Route::post('/operaciones/{sitio}/mantenimiento-off', [OperacionesController::class, 'desactivarMantenimiento'])->name('operaciones.mantenimiento-off');
@@ -42,6 +57,7 @@ Route::prefix('webminder-panel')->name('webminder-panel.')->middleware(['web', '
     Route::post('/operaciones/{sitio}/corregir-seguridad', [OperacionesController::class, 'corregirSeguridad'])->name('operaciones.corregir-seguridad');
     Route::get('/operaciones/{sitio}/reporte-salud', [OperacionesController::class, 'reporteSalud'])->name('operaciones.reporte-salud');
     Route::post('/operaciones/{sitio}/sso', [OperacionesController::class, 'sso'])->name('operaciones.sso');
+    Route::post('/operaciones/{sitio}/revision-seguridad', [OperacionesController::class, 'revisionSeguridad'])->name('operaciones.revision-seguridad');
 
     // Auditoría
     Route::get('/auditoria', [AuditoriaController::class, 'index'])->name('auditoria.index');

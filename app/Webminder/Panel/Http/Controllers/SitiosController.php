@@ -4,6 +4,7 @@ namespace App\Webminder\Panel\Http\Controllers;
 
 use App\Webminder\Panel\Models\SitioWeb;
 use App\Webminder\Panel\Models\Credencial;
+use App\Webminder\Panel\Models\EventoActividad;
 use App\Webminder\Panel\Models\Cliente;
 use App\Webminder\Panel\Services\AgenteComunicacionService;
 use Illuminate\View\View;
@@ -53,6 +54,7 @@ class SitiosController
             'sitio' => $sitio,
             'estado_actual' => $estado_actual,
             'eventos' => $eventos,
+            'actividad' => EventoActividad::where('sitio_id', $sitio->id)->latest('ocurrido_en')->limit(30)->get(),
         ]);
     }
 

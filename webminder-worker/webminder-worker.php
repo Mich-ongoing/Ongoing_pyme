@@ -1145,7 +1145,7 @@ class WebminderAgent {
         if (!function_exists('wp_get_translation_updates')) {
             require_once ABSPATH . 'wp-admin/includes/update.php';
         }
-        $translation_updates = wp_get_translation_updates();
+        $translation_updates = array_filter(wp_get_translation_updates(), [$this, 'translation_matches_installed']);
         if (!empty($translation_updates)) {
             $updates_count += 1;
         }
@@ -1760,7 +1760,7 @@ class WebminderAgent {
         if (!function_exists('wp_get_translation_updates')) {
             require_once ABSPATH . 'wp-admin/includes/update.php';
         }
-        $translations = wp_get_translation_updates();
+        $translations = array_filter(wp_get_translation_updates(), [$this, 'translation_matches_installed']);
         if (!empty($translations)) {
             $updates[] = [
                 'type'    => 'translation',
@@ -1821,7 +1821,10 @@ class WebminderAgent {
                 if (!function_exists('wp_get_translation_updates')) {
                     require_once ABSPATH . 'wp-admin/includes/update.php';
                 }
-                $translations = wp_get_translation_updates();
+                // Fuera las traducciones de versiones que ya no están instaladas: en un
+                // lote, el plugin acaba de actualizarse y la lista (del transient) es
+                // de la versión vieja; ese paquete falla o deja una traducción desfasada.
+                $translations = array_values(array_filter(wp_get_translation_updates(), [$this, 'translation_matches_installed']));
                 if (empty($translations)) {
                     ob_end_clean();
                     return rest_ensure_response(['success' => true, 'message' => 'No hay traducciones pendientes.']);
@@ -1829,9 +1832,12 @@ class WebminderAgent {
                 WP_Filesystem();
                 $skin = new \Automatic_Upgrader_Skin();
                 $upgrader = new \Language_Pack_Upgrader($skin);
-                $result = $upgrader->bulk_upgrade($translations);
+                // clear_update_cache=false: igual que en plugins/temas, el rebuild en REST tira los premium
+                $result = $upgrader->bulk_upgrade($translations, ['clear_update_cache' => false]);
 
-                // Resultado por paquete: true en éxito; WP_Error/false en fallo.
+                // Resultado por paquete: en éxito un ARRAY (el de install_package),
+                // no true; WP_Error/false/null en fallo. Contar solo === true
+                // daba siempre "fallo" aunque se instalaran todas.
                 // Las traducciones de plugins/temas PREMIUM (p. ej. Elementor
                 // Pro) se descargan del servidor del proveedor y, sin licencia
                 // activa, fallan con el MISMO tipo de error que el update del
@@ -1842,7 +1848,7 @@ class WebminderAgent {
                 $msgs = [];
                 if (is_array($result)) {
                     foreach ($result as $r) {
-                        if ($r === true) {
+                        if ($r !== false && $r !== null && !is_wp_error($r)) {
                             $ok_count++;
                         } elseif (is_wp_error($r)) {
                             $msgs[] = $r->get_error_message();
@@ -1853,7 +1859,7 @@ class WebminderAgent {
                 }
                 if (method_exists($skin, 'get_upgrade_messages')) {
                     foreach ((array) $skin->get_upgrade_messages() as $m) {
-                        $msgs[] = wp_strip_all_tags($m);
+                        $msgs[] = html_entity_decode(wp_strip_all_tags($m), ENT_QUOTES, 'UTF-8');
                     }
                 }
                 ob_end_clean();
@@ -2009,7 +2015,7 @@ class WebminderAgent {
                     $skin_messages = $upgrader_skin->get_upgrade_messages();
                     if (!empty($skin_messages)) {
                         // wp_strip_all_tags por si el mensaje trae HTML
-                        $message = wp_strip_all_tags(end($skin_messages));
+                        $message = html_entity_decode(wp_strip_all_tags(end($skin_messages)), ENT_QUOTES, 'UTF-8');
                     }
                 }
                 if ($message === '') {
@@ -2164,6 +2170,26 @@ class WebminderAgent {
         $active = array_values(array_unique($active));
         sort($active);
         update_option('active_plugins', $active);
+    }
+
+    /** ¿El paquete de idioma es para la versión instalada de su plugin/tema? */
+    public function translation_matches_installed($t) {
+        if (!is_object($t) || empty($t->type) || $t->type === 'core' || empty($t->version)) {
+            return true;
+        }
+        if ($t->type === 'theme') {
+            $theme = wp_get_theme($t->slug);
+            return $theme->exists() && $theme->get('Version') === $t->version;
+        }
+        if (!function_exists('get_plugins')) {
+            require_once ABSPATH . 'wp-admin/includes/plugin.php';
+        }
+        foreach (get_plugins() as $file => $data) {
+            if (dirname($file) === $t->slug || basename($file, '.php') === $t->slug) {
+                return isset($data['Version']) && $data['Version'] === $t->version;
+            }
+        }
+        return false;
     }
 
     /** ¿Está instalado? Impide que el panel pida rutas arbitrarias ("../"). */

@@ -59,10 +59,18 @@
             <div class="mt-8 pt-6 border-t border-slate-800 flex items-center justify-between">
                 <form action="/webminder-panel/sitios/{{ $sitio->id }}/regenerar-credenciales" method="POST" class="m-0">
                     @csrf
-                    <button type="submit" class="px-4 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 hover:bg-amber-500/20 text-xs font-semibold transition cursor-pointer" onclick="return confirm('¿Regenerar credenciales? Deberás actualizar las claves en el plugin del sitio cliente.');">
-                        🔄 Regenerar Claves API
+                    <button type="submit" class="px-4 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 hover:bg-amber-500/20 text-xs font-semibold transition cursor-pointer" onclick="return confirm('¿Rotar la clave secreta? Si el sitio está vinculado se cambia en ambos lados sin cortar la conexión; si no, tendrás que pegar el token nuevo en el worker.');">
+                        🔄 Rotar clave secreta
                     </button>
                 </form>
+                @if($credencial?->activa)
+                    <form action="{{ route('webminder-panel.sitios.desconectar', $sitio) }}" method="POST" class="m-0">
+                        @csrf
+                        <button type="submit" class="px-4 py-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 hover:bg-rose-500/20 text-xs font-semibold transition cursor-pointer" onclick="return confirm('¿Desvincular? El worker borrará sus credenciales y el panel dejará de poder gestionar el sitio.');">
+                            🔓 Desvincular sitio
+                        </button>
+                    </form>
+                @endif
                 <flux:button href="/webminder-panel/sitios/{{ $sitio->id }}" variant="primary" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-5 py-2.5 rounded-xl">
                     Entendido, Volver al Sitio
                 </flux:button>

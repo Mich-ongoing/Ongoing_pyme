@@ -1,0 +1,45 @@
+<?php
+
+namespace App\Webminder\Panel\Models;
+
+use App\Models\User;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+class Ejecucion extends Model
+{
+    protected $table = 'panel_ejecuciones';
+
+    protected $guarded = ['id'];
+
+    protected $casts = [
+        'copia_bd' => 'boolean',
+        'items' => 'array',
+        'iniciada_en' => 'datetime',
+        'terminada_en' => 'datetime',
+    ];
+
+    public function sitio(): BelongsTo
+    {
+        return $this->belongsTo(SitioWeb::class, 'sitio_id');
+    }
+
+    public function usuario(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'usuario_id');
+    }
+
+    public function terminada(): bool
+    {
+        return in_array($this->estado, ['completada', 'con_errores', 'interrumpida'], true);
+    }
+
+    /** Guarda el resultado de un ítem (se persiste al momento: la página de progreso lo lee). */
+    public function marcarItem(int $i, string $estado, ?string $mensaje = null): void
+    {
+        $items = $this->items;
+        $items[$i]['estado'] = $estado;
+        $items[$i]['mensaje'] = $mensaje;
+        $this->update(['items' => $items]);
+    }
+}

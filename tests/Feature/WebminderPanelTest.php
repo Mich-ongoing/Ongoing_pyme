@@ -4,7 +4,10 @@ namespace Tests\Feature;
 
 use App\Webminder\Panel\Models\Cliente;
 use App\Webminder\Panel\Models\Credencial;
+use App\Webminder\Panel\Models\Ejecucion;
 use App\Webminder\Panel\Models\EventoActividad;
+use App\Webminder\Panel\Jobs\ActualizarSitio;
+use App\Models\User;
 use App\Webminder\Panel\Models\SitioWeb;
 use App\Webminder\Panel\Services\AgenteComunicacionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -134,5 +137,89 @@ class WebminderPanelTest extends TestCase
         $this->ingesta($e, 'sk_otro_secreto')->assertStatus(401);
         $this->ingesta($e, null, time() - 3600)->assertStatus(401);
         $this->assertSame(0, EventoActividad::count());
+    }
+
+    private function lote(array $items, bool $copia = true): Ejecucion
+    {
+        return Ejecucion::create(['sitio_id' => $this->sitio->id, 'copia_bd' => $copia, 'items' => array_map(
+            fn ($i) => ['tipo' => 'plugin', 'item' => $i, 'nombre' => $i, 'desde' => '1', 'hasta' => '2', 'estado' => 'pendiente', 'mensaje' => null],
+            $items
+        )]);
+    }
+
+    public function test_el_lote_hace_copia_y_sigue_tras_un_rollback(): void
+    {
+        Http::fake(function (Request $req) {
+            return match (true) {
+                str_ends_with($req->url(), '/backup-db') => Http::response(['success' => true, 'file' => 'wp-content/x/db.sql.gz']),
+                str_ends_with($req->url(), '/status') => Http::response(['success' => true, 'data' => []]),
+                ($req->data()['item'] ?? null) === 'b/b.php' => Http::response(['success' => false, 'rolled_back' => true, 'message' => 'HTTP 500, restaurado']),
+                default => Http::response(['success' => true, 'verified' => true, 'message' => 'ok']),
+            };
+        });
+        $e = $this->lote(['a/a.php', 'b/b.php', 'c/c.php']);
+
+        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class));
+
+        $e->refresh();
+        $this->assertSame('con_errores', $e->estado);
+        $this->assertSame('wp-content/x/db.sql.gz', $e->archivo_copia_bd);
+        $this->assertSame(['ok', 'revertido', 'ok'], array_column($e->items, 'estado'));
+    }
+
+    public function test_si_la_copia_de_bd_falla_no_se_actualiza_nada(): void
+    {
+        Http::fake(['*' => Http::response(['code' => 'dump_error', 'message' => 'disco lleno'], 500)]);
+        $e = $this->lote(['a/a.php']);
+
+        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class));
+
+        $e->refresh();
+        $this->assertSame('interrumpida', $e->estado);
+        $this->assertStringContainsString('disco lleno', $e->error);
+        $this->assertSame(['pendiente'], array_column($e->items, 'estado'));
+        Http::assertSentCount(1);
+    }
+
+    public function test_si_se_pierde_el_contacto_el_lote_se_detiene(): void
+    {
+        Http::fake(function (Request $req) {
+            if (($req->data()['item'] ?? null) === 'a/a.php') {
+                throw new \Illuminate\Http\Client\ConnectionException('timeout');
+            }
+
+            return Http::response(['success' => true, 'data' => []]);
+        });
+        $e = $this->lote(['a/a.php', 'b/b.php'], false);
+
+        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class));
+
+        $e->refresh();
+        $this->assertSame('interrumpida', $e->estado);
+        $this->assertSame(['error', 'omitido'], array_column($e->items, 'estado'));
+    }
+
+    public function test_las_pantallas_del_panel_cargan(): void
+    {
+        Http::fake(['*' => Http::response(['success' => true, 'data' => [
+            ['type' => 'plugin', 'item' => 'a/a.php', 'name' => 'Plugin A', 'version' => '2.0', 'current_version' => '1.0'],
+            ['type' => 'translation', 'item' => 'translations', 'name' => 'Traducciones', 'version' => '3'],
+        ]])]);
+        $user = User::create(['name' => 'Admin', 'email' => 'admin@test.test', 'password' => bcrypt('x'), 'role' => 'admin']);
+        $e = $this->lote(['a/a.php']);
+        EventoActividad::create(['sitio_id' => $this->sitio->id, 'local_id' => 1, 'ocurrido_en' => now(), 'accion' => 'login', 'severidad' => 'critical']);
+
+        $this->actingAs($user)->get(route('webminder-panel.sitios.show', $this->sitio))->assertOk()->assertSee('Actividad en el sitio')->assertSee('login');
+        $this->actingAs($user)->get(route('webminder-panel.sitios.actualizaciones', $this->sitio))->assertOk()->assertSee('Plugin A')->assertSee('3 paquetes');
+        $this->actingAs($user)->get(route('webminder-panel.ejecuciones.show', $e))->assertOk()->assertSee('location.reload', false);
+        $this->actingAs($user)->get(route('webminder-panel.sitios.credenciales', $this->sitio))->assertOk()->assertSee('Desvincular');
+    }
+
+    public function test_el_login_tiene_limite_de_intentos(): void
+    {
+        for ($i = 0; $i < 5; $i++) {
+            $this->post('/login', ['email' => 'nadie@test.test', 'password' => 'mal']);
+        }
+        $this->post('/login', ['email' => 'nadie@test.test', 'password' => 'mal'])->assertStatus(429);
     }
 }

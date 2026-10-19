@@ -7,6 +7,7 @@
         $plugins = $estado_actual?->plugins() ?? [];
         $temas = $estado_actual?->temas() ?? [];
         $entorno = $estado_actual?->entorno() ?? [];
+        $cerrojo = $estado_actual?->datos['cerrojo'] ?? null;
     @endphp
 
     <!-- Header Action Banner -->
@@ -53,6 +54,15 @@
                         </button>
                     </form>
                 @endif
+                <a href="{{ route('webminder-panel.sitios.actualizaciones', $sitio) }}" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition">
+                    ⬆️ Actualizaciones
+                </a>
+                <form action="{{ route('webminder-panel.operaciones.sso', $sitio) }}" method="POST" target="_blank" class="m-0">
+                    @csrf
+                    <button type="submit" class="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer">
+                        🚪 Entrar al wp-admin
+                    </button>
+                </form>
                 <a href="/webminder-panel/sitios/{{ $sitio->id }}/credenciales" class="inline-flex items-center px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition">
                     🔑 Credenciales API
                 </a>
@@ -279,6 +289,60 @@
         @endif
     </flux:card>
 
+    <!-- Cerrojo -->
+    <flux:card class="bg-slate-950/60 border border-slate-800 p-6 rounded-2xl mb-8">
+        <div class="flex flex-wrap items-center justify-between gap-4 mb-4 pb-4 border-b border-slate-800">
+            <div>
+                <flux:heading size="lg" class="text-slate-100 font-bold">🔒 Cerrojo</flux:heading>
+                <flux:subheading class="text-slate-400 text-xs">Escáner de backdoors y endurecimiento propio. Limpieza y cuarentena se hacen en el wp-admin (Herramientas → Cerrojo).</flux:subheading>
+            </div>
+            @if($cerrojo['installed'] ?? false)
+                <form action="{{ route('webminder-panel.operaciones.revision-seguridad', $sitio) }}" method="POST" class="m-0">
+                    @csrf
+                    <button type="submit" class="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer">🔍 Revisión de seguridad ahora</button>
+                </form>
+            @endif
+        </div>
+        @if(!$cerrojo)
+            <p class="text-sm text-slate-500">Sin datos: verifica el estado del sitio (requiere worker 2.0).</p>
+        @elseif(!$cerrojo['installed'])
+            <p class="text-sm text-amber-300">⚠️ Cerrojo no está instalado en este sitio.</p>
+        @else
+            <p class="text-sm {{ $cerrojo['pending'] ? 'text-rose-400 font-semibold' : 'text-emerald-400' }}">
+                v{{ $cerrojo['version'] }}{{ $cerrojo['mu_plugin'] ? ' (mu-plugin)' : ' (plugin normal: se puede desactivar)' }} ·
+                {{ $cerrojo['pending'] ? $cerrojo['pending'] . ' hallazgos en la última revisión' : 'sin hallazgos en la última revisión' }}
+            </p>
+        @endif
+        @if(session('hallazgos'))
+            <ul class="mt-4 space-y-1 text-xs text-rose-300 list-disc pl-5">
+                @foreach(session('hallazgos') as $h)<li>{{ $h }}</li>@endforeach
+            </ul>
+        @endif
+    </flux:card>
+
+    <!-- Log de actividad del sitio (lo envía el worker) -->
+    <flux:card class="bg-slate-950/60 border border-slate-800 p-6 rounded-2xl mb-8">
+        <div class="mb-4 pb-4 border-b border-slate-800">
+            <flux:heading size="lg" class="text-slate-100 font-bold">🕵️ Actividad en el sitio</flux:heading>
+            <flux:subheading class="text-slate-400 text-xs">Accesos, plugins, usuarios y ajustes críticos registrados por el worker</flux:subheading>
+        </div>
+        @if($actividad->isEmpty())
+            <p class="text-sm text-slate-500">Aún no ha llegado actividad de este sitio.</p>
+        @else
+            <ul class="divide-y divide-slate-800/60 text-sm">
+                @foreach($actividad as $a)
+                    <li class="py-2.5 flex flex-wrap justify-between gap-2">
+                        <span class="{{ $a->severidad === 'critical' ? 'text-rose-400 font-semibold' : 'text-slate-300' }}">
+                            {{ $a->accion }}@if($a->objeto_nombre) · {{ $a->objeto_nombre }}@endif
+                            <span class="text-xs text-slate-500">{{ $a->actor_login ?? 'desconocido' }}{{ $a->ip ? ' · ' . $a->ip : '' }}</span>
+                        </span>
+                        <span class="text-xs text-slate-500">{{ $a->ocurrido_en->diffForHumans() }}</span>
+                    </li>
+                @endforeach
+            </ul>
+        @endif
+    </flux:card>
+
     <!-- Section 5: Audit Log Events -->
     <flux:card class="bg-slate-950/60 border border-slate-800 p-6 rounded-2xl">
         <div class="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
@@ -301,9 +365,9 @@
                             <td class="py-3.5 px-4 font-semibold text-slate-200">
                                 {{ \App\Webminder\Panel\Models\EventoAuditoria::getAccionLabel($evento->accion) }}
                             </td>
-                            <td class="py-3.5 px-4 text-slate-300">{{ $evento->mensaje }}</td>
+                            <td class="py-3.5 px-4 text-slate-300">{{ $evento->descripcion }}@if($evento->resultado !== 'success' && !empty($evento->detalles['error'])) <span class="block text-xs text-rose-400">{{ $evento->detalles['error'] }}</span>@endif</td>
                             <td class="py-3.5 px-4">
-                                @if($evento->resultado == 'exito')
+                                @if($evento->resultado === 'success')
                                     <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">ÉXITO</span>
                                 @else
                                     <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">ERROR</span>

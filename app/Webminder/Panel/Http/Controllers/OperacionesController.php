@@ -78,6 +78,24 @@ class OperacionesController
     }
 
     /**
+     * Revisión completa de Cerrojo en el sitio (solo lectura). Puede tardar minutos en sitios grandes.
+     */
+    public function revisionSeguridad(SitioWeb $sitio): RedirectResponse
+    {
+        $resultado = $this->agente->hacerPeticion($sitio, 'security-scan', [], null, 600);
+
+        if (!$resultado['success']) {
+            return back()->with('error', 'No se pudo revisar: ' . $resultado['error']);
+        }
+        $this->agente->obtenerStatus($sitio);
+        $hallazgos = $resultado['findings'] ?? [];
+
+        return back()
+            ->with($hallazgos ? 'error' : 'success', $hallazgos ? count($hallazgos) . ' hallazgos de Cerrojo.' : 'Cerrojo no encontró nada.')
+            ->with('hallazgos', $hallazgos);
+    }
+
+    /**
      * Acceso 1-clic al wp-admin con la cuenta de la agencia.
      */
     public function sso(SitioWeb $sitio): RedirectResponse

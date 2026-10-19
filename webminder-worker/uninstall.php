@@ -19,6 +19,9 @@ delete_option('ongoing_webminder_db_version');
 delete_option('ongoing_webminder_last_flush');
 delete_option('ongoing_webminder_file_edit_state');
 delete_option('ongoing_webminder_update_failures');
+delete_option('ongoing_webminder_last_update_check');
+delete_option('ongoing_webminder_panel_url');
+delete_option('ongoing_webminder_update_lock');
 
 // 1b. Log de actividad local: tabla y cron
 global $wpdb;
@@ -36,9 +39,11 @@ $wpdb->query(
         OR option_name LIKE '\_transient\_timeout\_ongoing\_sso\_token\_%'"
 );
 
-// 3. Eliminar respaldos de actualización en disco
-$backup_dir = WP_CONTENT_DIR . '/webminder-backups';
-if (is_dir($backup_dir)) {
+// 3. Eliminar respaldos (archivos y copias de BD) en disco: la carpeta
+// antigua y la de nombre aleatorio de la 2.x
+$backup_dirs = glob(WP_CONTENT_DIR . '/webminder-backups*', GLOB_ONLYDIR) ?: [];
+delete_option('ongoing_webminder_backup_dir');
+foreach ($backup_dirs as $backup_dir) {
     $rrmdir = function ($dir) use (&$rrmdir) {
         foreach (scandir($dir) ?: [] as $entry) {
             if ($entry === '.' || $entry === '..') {
