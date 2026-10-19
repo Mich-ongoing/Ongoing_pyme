@@ -28,6 +28,12 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    // Browserless (Docker en el servidor del panel) para la comparación visual
+    'capturas' => [
+        'url' => env('WEBMINDER_CAPTURAS_URL'),
+        'token' => env('WEBMINDER_CAPTURAS_TOKEN'),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

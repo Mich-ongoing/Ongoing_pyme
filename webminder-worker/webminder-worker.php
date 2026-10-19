@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.1.1
+ * Version:     2.2.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.1.1';
+    const VERSION = '2.2.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -435,6 +435,12 @@ class WebminderAgent {
             'permission_callback' => [$this, 'verify_signature']
         ]);
 
+        register_rest_route(self::API_NAMESPACE, '/rollback', [
+            'methods'             => 'POST',
+            'callback'            => [$this, 'handle_rollback'],
+            'permission_callback' => [$this, 'verify_signature']
+        ]);
+
         register_rest_route(self::API_NAMESPACE, '/backup-db', [
             'methods'             => 'POST',
             'callback'            => [$this, 'handle_backup_db'],
@@ -706,6 +712,84 @@ class WebminderAgent {
             if (!is_array($state) || ($state['started'] ?? 0) < time() - DAY_IN_SECONDS) {
                 delete_option($name);
             }
+        }
+    }
+
+    /**
+     * Vuelta atrás pedida desde el panel (p. ej. tras un cambio visual): restaura
+     * la copia que /update conservó con keep_backup. Las copias duran 7 días.
+     */
+    public function handle_rollback(\WP_REST_Request $request) {
+        if ($bg = $this->in_background($request, __FUNCTION__)) {
+            return $bg;
+        }
+        $params = (array) $request->get_json_params();
+        $type = (string) ($params['type'] ?? '');
+        $item = (string) ($params['item'] ?? '');
+        $backup = (string) ($params['backup'] ?? '');
+        if (!in_array($type, ['plugin', 'theme'], true) || !$this->item_installed($type, $item)
+            || !preg_match('/^([A-Za-z0-9._-]+)-backup-\d+$/', $backup, $m)) {
+            return new \WP_Error('invalid_params', 'Parámetros inválidos.', ['status' => 400]);
+        }
+        $slug = $m[1];
+        $backup_path = self::backup_dir() . '/' . $backup;
+        if (!file_exists($backup_path)) {
+            return new \WP_Error('no_backup', 'La copia de la versión anterior ya no existe (se guardan 7 días).', ['status' => 404]);
+        }
+        $single_file = is_file($backup_path);
+        $current_slug = $type === 'theme' ? $item : (dirname($item) === '.' ? basename($item, '.php') : dirname($item));
+        // La copia tiene que ser de ESTE elemento (un hello.php actualizado vive en hello-dolly/hello.php)
+        if ($current_slug !== $slug && !($single_file && basename($item, '.php') === $slug)) {
+            return new \WP_Error('backup_mismatch', 'Esa copia no corresponde a este elemento.', ['status' => 400]);
+        }
+        if (!$this->acquire_update_lock()) {
+            return new \WP_Error('busy', 'Hay una actualización en curso en este sitio. Reintenta en unos minutos.', ['status' => 409]);
+        }
+        ob_start();
+        try {
+            require_once ABSPATH . 'wp-admin/includes/file.php';
+            require_once ABSPATH . 'wp-admin/includes/plugin.php';
+            global $wp_filesystem;
+            WP_Filesystem();
+            if (empty($wp_filesystem) || !is_object($wp_filesystem)) {
+                require_once ABSPATH . 'wp-admin/includes/class-wp-filesystem-base.php';
+                require_once ABSPATH . 'wp-admin/includes/class-wp-filesystem-direct.php';
+                $wp_filesystem = new \WP_Filesystem_Direct(null);
+            }
+            $this->job_progress('Restaurando la versión anterior', true);
+            $was_active = $type === 'plugin' && is_plugin_active($item);
+            $network = $type === 'plugin' && is_multisite() && is_plugin_active_for_network($item);
+
+            if ($single_file) {
+                if (dirname($item) !== '.') {
+                    $wp_filesystem->delete(WP_PLUGIN_DIR . '/' . dirname($item), true);
+                }
+                $target = WP_PLUGIN_DIR . '/' . $slug . '.php';
+                $restored = @copy($backup_path, $target);
+                wp_opcache_invalidate($target, true);
+                $old_item = $slug . '.php';
+            } else {
+                $target = ($type === 'theme' ? get_theme_root() : WP_PLUGIN_DIR) . '/' . $slug;
+                $wp_filesystem->delete($target, true);
+                $restored = copy_dir($backup_path, $target) === true;
+                $old_item = $item;
+            }
+            if ($was_active) {
+                $this->keep_plugin_active($old_item, $network, $item);
+            }
+            $this->purge_all_caches();
+            ob_end_clean();
+
+            if (!$restored) {
+                return new \WP_Error('restore_failed', 'La restauración falló. Copia conservada en ' . str_replace(ABSPATH, '', $backup_path) . ' para recuperarla a mano.', ['status' => 500]);
+            }
+            $wp_filesystem->delete($backup_path, true);
+            return rest_ensure_response(['success' => true, 'item' => $old_item, 'message' => 'Restaurada la versión anterior.']);
+        } catch (\Throwable $e) {
+            @ob_end_clean();
+            return new \WP_Error('restore_failed', 'Excepción al restaurar: ' . $e->getMessage(), ['status' => 500]);
+        } finally {
+            delete_option(self::OPTION_UPDATE_LOCK);
         }
     }
 
@@ -2249,7 +2333,9 @@ class WebminderAgent {
                 }
             }
 
-            if ($backup_success) {
+            // keep_backup: el panel puede pedir volver atrás (cambio visual); se purga a los 7 días
+            $kept = $backup_success && !empty($params['keep_backup']);
+            if ($backup_success && !$kept) {
                 $wp_filesystem->delete($backup_path, true);
             }
 
@@ -2270,7 +2356,9 @@ class WebminderAgent {
                 'success'  => true,
                 'message'  => ucfirst($type) . ' actualizado correctamente.',
                 'verified' => $verified, // false = ninguna sonda respondía antes: no se pudo comprobar
-                'purged'   => $purged_caches
+                'purged'   => $purged_caches,
+                'item'     => $new_item,
+                'backup'   => $kept ? basename($backup_path) : null,
             ]);
             
         } catch (\Throwable $e) {

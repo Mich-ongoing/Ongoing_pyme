@@ -47,6 +47,8 @@ Route::prefix('webminder-panel')->name('webminder-panel.')->middleware(['web', '
     Route::get('/sitios/{sitio}/actualizaciones', [ActualizacionesController::class, 'index'])->name('sitios.actualizaciones');
     Route::post('/sitios/{sitio}/actualizaciones', [ActualizacionesController::class, 'store'])->name('sitios.actualizaciones.store');
     Route::get('/ejecuciones/{ejecucion}', [ActualizacionesController::class, 'show'])->name('ejecuciones.show');
+    Route::post('/ejecuciones/{ejecucion}/items/{i}/revertir', [ActualizacionesController::class, 'revertir'])->whereNumber('i')->name('ejecuciones.revertir');
+    Route::get('/ejecuciones/{ejecucion}/capturas/{archivo}', [ActualizacionesController::class, 'captura'])->name('ejecuciones.captura');
 
     // Operaciones remotas
     Route::post('/operaciones/{sitio}/mantenimiento-on', [OperacionesController::class, 'activarMantenimiento'])->name('operaciones.mantenimiento-on');

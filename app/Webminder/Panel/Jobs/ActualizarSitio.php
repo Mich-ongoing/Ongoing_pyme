@@ -4,6 +4,7 @@ namespace App\Webminder\Panel\Jobs;
 
 use App\Webminder\Panel\Models\Ejecucion;
 use App\Webminder\Panel\Services\AgenteComunicacionService;
+use App\Webminder\Panel\Services\CapturasService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
@@ -37,7 +38,7 @@ class ActualizarSitio implements ShouldQueue
         return [(new WithoutOverlapping('sitio-' . $sitio))->releaseAfter(60)->expireAfter(3700)];
     }
 
-    public function handle(AgenteComunicacionService $agente): void
+    public function handle(AgenteComunicacionService $agente, CapturasService $capturas): void
     {
         $ejecucion = Ejecucion::with('sitio.credencial')->findOrFail($this->ejecucionId);
         if ($ejecucion->estado !== 'pendiente') {
@@ -61,11 +62,33 @@ class ActualizarSitio implements ShouldQueue
         $errores = 0;
         foreach ($ejecucion->items as $i => $item) {
             $ejecucion->marcarItem($i, 'en_curso');
+            $visual = $capturas->activa() && $item['tipo'] !== 'translation';
+            if ($visual) {
+                // Dos capturas de antes: lo que cambia entre ellas es ruido (sliders, fechas)
+                $progreso("Capturando la web antes de actualizar {$item['nombre']}…");
+                $antes = $capturas->capturar($sitio->url);
+                $antes2 = $capturas->capturar($sitio->url);
+            }
             $ejecucion->update(['progreso' => "Actualizando {$item['nombre']}…"]);
-            $r = $agente->ejecutarActualizacion($sitio, $item['tipo'], $item['item'], [], $progreso);
+            // keep_backup: el worker guarda 7 días la versión anterior para poder revertir desde aquí
+            $r = $agente->ejecutarActualizacion($sitio, $item['tipo'], $item['item'], $visual ? ['keep_backup' => true] : [], $progreso);
 
             if ($r['success']) {
-                $ejecucion->marcarItem($i, ($r['verified'] ?? true) ? 'ok' : 'ok_sin_verificar', $r['message'] ?? null);
+                $estado = ($r['verified'] ?? true) ? 'ok' : 'ok_sin_verificar';
+                $mensaje = $r['message'] ?? null;
+                $extra = ['backup' => $r['backup'] ?? null, 'ruta' => $r['item'] ?? $item['item']];
+                if ($visual) {
+                    $progreso("Comparando la web antes y después de {$item['nombre']}…");
+                    $extra['visual'] = $capturas->compararYGuardar($ejecucion->id, $i, $antes, $antes2, $capturas->capturar($sitio->url));
+                    $medidos = array_filter($extra['visual'], 'is_float');
+                    if (!$medidos) {
+                        $mensaje = trim($mensaje . ' No se pudo hacer la comparación visual (capturas fallidas).');
+                    } elseif (max($medidos) > CapturasService::UMBRAL) {
+                        $estado = 'cambio_visual';
+                        $mensaje = 'La web se ve distinta tras actualizar. Revisa las capturas y revierte si algo se ha roto.';
+                    }
+                }
+                $ejecucion->marcarItem($i, $estado, $mensaje, $extra);
                 continue;
             }
             $errores++;

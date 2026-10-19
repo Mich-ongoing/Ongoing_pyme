@@ -39,6 +39,27 @@ sigue siendo autónomo: el worker solo lee su estado y lanza su revisión.
 4. Publicar el worker: `php artisan webminder:worker-zip` (tras cambiar `VERSION` en el plugin).
    Los sitios lo ven como actualización normal de WordPress en ≤12 h.
 
+## Comparación visual (fase 2)
+
+Antes de cada plugin/tema el panel captura la portada (escritorio 1366 px y móvil 390 px) dos
+veces; lo que cambia entre ellas es ruido (sliders, fechas) y se ignora. Tras actualizar captura
+otra vez: si cambia más del 3 % de la página el elemento queda en "la web se ve distinta", con
+las capturas de antes, después y los cambios en rojo, y un botón **Revertir** (el worker ≥ 2.2
+guarda la versión anterior 7 días). Las capturas se borran a los 30 días.
+
+Necesita Browserless (Chrome sin pantalla) en el servidor del panel, solo en localhost. Como
+root (Plesk → Herramientas y configuración → Terminal SSH):
+
+```bash
+docker run -d --name webminder-capturas --restart unless-stopped \
+  -p 127.0.0.1:3900:3000 --memory=2g \
+  -e TOKEN=<WEBMINDER_CAPTURAS_TOKEN> -e CONCURRENT=2 -e TIMEOUT=90000 \
+  ghcr.io/browserless/chromium:latest
+```
+
+y en el `.env`: `WEBMINDER_CAPTURAS_URL=http://127.0.0.1:3900` y `WEBMINDER_CAPTURAS_TOKEN`.
+Sin esas dos variables la comparación queda apagada y todo funciona como antes.
+
 ## Pruebas
 
 - Panel: `ddev artisan test`.

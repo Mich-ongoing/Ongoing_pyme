@@ -42,3 +42,6 @@ Artisan::command('webminder:worker-zip', function () {
 // Plesk: un solo cron "* * * * * php artisan schedule:run"
 Schedule::command('queue:work --stop-when-empty --max-time=3500 --timeout=3600')->everyMinute()->withoutOverlapping(70)->runInBackground();
 Schedule::command('webminder:verificar')->hourly()->withoutOverlapping();
+// Capturas de la comparación visual: 30 días (las copias para revertir en el sitio duran 7)
+Schedule::call(fn () => \App\Webminder\Panel\Models\Ejecucion::where('created_at', '<', now()->subDays(30))->pluck('id')
+    ->each(fn ($id) => \Illuminate\Support\Facades\Storage::disk('local')->deleteDirectory(\App\Webminder\Panel\Services\CapturasService::ruta($id))))->daily();

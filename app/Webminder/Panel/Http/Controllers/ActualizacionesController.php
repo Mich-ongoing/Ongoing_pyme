@@ -3,6 +3,10 @@
 namespace App\Webminder\Panel\Http\Controllers;
 
 use App\Webminder\Panel\Jobs\ActualizarSitio;
+use App\Webminder\Panel\Jobs\RevertirItem;
+use App\Webminder\Panel\Services\CapturasService;
+use Illuminate\Support\Facades\Storage;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 use App\Webminder\Panel\Models\Ejecucion;
 use App\Webminder\Panel\Models\SitioWeb;
 use App\Webminder\Panel\Services\AgenteComunicacionService;
@@ -77,5 +81,28 @@ class ActualizacionesController
     public function show(Ejecucion $ejecucion): View
     {
         return view('webminder-panel::sitios.ejecucion', ['ejecucion' => $ejecucion->load('sitio', 'usuario')]);
+    }
+
+    /** Vuelve a la versión anterior un ítem ya actualizado (copia guardada 7 días en el sitio). */
+    public function revertir(Ejecucion $ejecucion, int $i): RedirectResponse
+    {
+        $item = $ejecucion->items[$i] ?? null;
+        abort_unless($item && $ejecucion->terminada(), 404);
+        if (empty($item['backup']) || !in_array($item['estado'], ['ok', 'ok_sin_verificar', 'cambio_visual'], true)) {
+            return back()->with('error', 'Este elemento no tiene una versión anterior guardada.');
+        }
+        $ejecucion->marcarItem($i, 'revirtiendo', null);
+        RevertirItem::dispatch($ejecucion->id, $i);
+
+        return back()->with('success', "Volviendo {$item['nombre']} a la versión {$item['desde']}…");
+    }
+
+    public function captura(Ejecucion $ejecucion, string $archivo): StreamedResponse
+    {
+        abort_unless(preg_match('/^\d+-(escritorio|movil)-(antes|despues|diff)\.jpg$/', $archivo), 404);
+        $ruta = CapturasService::ruta($ejecucion->id, $archivo);
+        abort_unless(Storage::disk('local')->exists($ruta), 404);
+
+        return Storage::disk('local')->response($ruta);
     }
 }

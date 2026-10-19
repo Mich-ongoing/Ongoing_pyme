@@ -10,6 +10,10 @@ use App\Webminder\Panel\Jobs\ActualizarSitio;
 use App\Models\User;
 use App\Webminder\Panel\Models\SitioWeb;
 use App\Webminder\Panel\Services\AgenteComunicacionService;
+use App\Webminder\Panel\Services\CapturasService;
+use App\Webminder\Panel\Jobs\RevertirItem;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -162,7 +166,7 @@ class WebminderPanelTest extends TestCase
         });
         $e = $this->lote(['a/a.php', 'b/b.php', 'c/c.php']);
 
-        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class));
+        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class), app(CapturasService::class));
 
         $e->refresh();
         $this->assertSame('con_errores', $e->estado);
@@ -175,7 +179,7 @@ class WebminderPanelTest extends TestCase
         Http::fake(['*' => Http::response(['code' => 'dump_error', 'message' => 'disco lleno'], 500)]);
         $e = $this->lote(['a/a.php']);
 
-        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class));
+        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class), app(CapturasService::class));
 
         $e->refresh();
         $this->assertSame('interrumpida', $e->estado);
@@ -195,7 +199,7 @@ class WebminderPanelTest extends TestCase
         });
         $e = $this->lote(['a/a.php', 'b/b.php'], false);
 
-        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class));
+        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class), app(CapturasService::class));
 
         $e->refresh();
         $this->assertSame('interrumpida', $e->estado);
@@ -218,7 +222,7 @@ class WebminderPanelTest extends TestCase
         });
         $e = $this->lote(['a/a.php']);
 
-        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class));
+        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class), app(CapturasService::class));
 
         $e->refresh();
         $this->assertSame('wp-content/x/db.sql.gz', $e->archivo_copia_bd);
@@ -235,7 +239,7 @@ class WebminderPanelTest extends TestCase
         });
         $e = $this->lote(['a/a.php']);
 
-        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class));
+        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class), app(CapturasService::class));
 
         $e->refresh();
         $this->assertSame('interrumpida', $e->estado);
@@ -257,6 +261,78 @@ class WebminderPanelTest extends TestCase
 
         $this->assertFalse($r['success']);
         $this->assertStringContainsString('HTTP 524', $r['error']);
+    }
+
+    /** JPEG de prueba: fondo blanco, un bloque de color y una franja que cambia (ruido). */
+    private static function jpeg(int $alto = 800, ?array $bloque = null, int $ruido = 0): string
+    {
+        $img = imagecreatetruecolor(400, $alto);
+        imagefill($img, 0, 0, imagecolorallocate($img, 255, 255, 255));
+        imagefilledrectangle($img, 0, 0, 399, 40, imagecolorallocate($img, $ruido, 0, 255 - $ruido)); // "slider"
+        if ($bloque) {
+            imagefilledrectangle($img, ...$bloque, ...[imagecolorallocate($img, 200, 30, 30)]);
+        }
+        ob_start();
+        imagejpeg($img, null, 90);
+
+        return ob_get_clean();
+    }
+
+    public function test_la_comparacion_ignora_el_ruido_y_detecta_cambios_reales(): void
+    {
+        $c = app(CapturasService::class);
+
+        // El slider cambia en las tres capturas: no cuenta
+        [$igual] = $c->comparar(self::jpeg(ruido: 0), self::jpeg(ruido: 255), self::jpeg(ruido: 120));
+        $this->assertLessThan(1, $igual);
+
+        // Un bloque nuevo de 200x200 en 400x800 es ~12% de la página
+        [$roto, $diff] = $c->comparar(self::jpeg(), self::jpeg(), self::jpeg(bloque: [100, 300, 300, 500]));
+        $this->assertGreaterThan(CapturasService::UMBRAL, $roto);
+        $this->assertStringStartsWith("\xFF\xD8", $diff);
+
+        // La página crece un 25%: cuenta como cambio
+        [$crece] = $c->comparar(self::jpeg(), self::jpeg(), self::jpeg(1000));
+        $this->assertGreaterThan(15, $crece);
+    }
+
+    public function test_el_lote_compara_capturas_y_permite_revertir(): void
+    {
+        Storage::fake('local');
+        config(['services.capturas.url' => 'http://capturas.test:3000', 'services.capturas.token' => 't']);
+        $capturas = 0;
+        Http::fake(function (Request $req) use (&$capturas) {
+            return match (true) {
+                // 2 vistas x (antes, antes2) y luego las de después, con un bloque roto
+                str_contains($req->url(), 'capturas.test') => Http::response(++$capturas > 4 ? self::jpeg(bloque: [100, 300, 300, 500]) : self::jpeg()),
+                str_ends_with($req->url(), '/update') => Http::response(['success' => true, 'verified' => true, 'item' => 'a/a.php', 'backup' => 'a-backup-123']),
+                default => Http::response(['success' => true, 'data' => []]),
+            };
+        });
+        $e = $this->lote(['a/a.php'], false);
+
+        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class), app(CapturasService::class));
+
+        $e->refresh();
+        $item = $e->items[0];
+        $this->assertSame('cambio_visual', $item['estado']);
+        $this->assertGreaterThan(CapturasService::UMBRAL, $item['visual']['escritorio']);
+        $this->assertSame('a-backup-123', $item['backup']);
+        Storage::disk('local')->assertExists(CapturasService::ruta($e->id, '0-movil-diff.jpg'));
+        Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/update') && ($r->data()['keep_backup'] ?? false) === true);
+
+        $usuario = User::factory()->create();
+        $this->actingAs($usuario)->get(route('webminder-panel.ejecuciones.captura', [$e, '0-escritorio-antes.jpg']))->assertOk();
+        $this->actingAs($usuario)->get(route('webminder-panel.ejecuciones.captura', [$e, '../../.env']))->assertNotFound();
+
+        Queue::fake();
+        $this->actingAs($usuario)->post(route('webminder-panel.ejecuciones.revertir', [$e, 0]))->assertRedirect();
+        Queue::assertPushed(RevertirItem::class);
+        $this->assertSame('revirtiendo', $e->refresh()->items[0]['estado']);
+
+        (new RevertirItem($e->id, 0))->handle(app(AgenteComunicacionService::class));
+        $this->assertSame('revertido_manual', $e->refresh()->items[0]['estado']);
+        Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/rollback') && $r->data()['backup'] === 'a-backup-123' && $r->data()['item'] === 'a/a.php');
     }
 
     public function test_las_pantallas_del_panel_cargan(): void

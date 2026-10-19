@@ -10,7 +10,13 @@
             'licencia' => ['Requiere licencia', 'text-amber-300'],
             'error' => ['Error', 'text-rose-400'],
             'omitido' => ['No se intentó', 'text-slate-500'],
+            'cambio_visual' => ['Actualizado, pero la web se ve distinta', 'text-amber-300'],
+            'revirtiendo' => ['Volviendo a la versión anterior…', 'text-indigo-400'],
+            'revertido_manual' => ['Revertido desde el panel', 'text-slate-300'],
+            'error_revertir' => ['No se pudo revertir', 'text-rose-400'],
         ];
+        $vistas = ['escritorio' => 'Escritorio', 'movil' => 'Móvil'];
+        $revirtiendo = collect($ejecucion->items)->contains('estado', 'revirtiendo');
         $lote = [
             'pendiente' => 'En cola: empezará en cuanto el proceso de colas lo recoja.',
             'en_curso' => 'En curso. Esta página se recarga sola.',
@@ -32,6 +38,9 @@
             @if($ejecucion->error)
                 <p class="text-sm text-rose-400 mt-2">{{ $ejecucion->error }}</p>
             @endif
+            @if(collect($ejecucion->items)->contains('estado', 'cambio_visual'))
+                <p class="text-sm text-amber-300 mt-2">Algún elemento cambió el aspecto de la web: revisa sus capturas abajo.</p>
+            @endif
             @if($ejecucion->archivo_copia_bd)
                 <p class="text-xs text-slate-400 mt-2">Copia de la BD en el sitio: <code>{{ $ejecucion->archivo_copia_bd }}</code> · restaurar por SSH con <code>wp db import</code></p>
             @endif
@@ -51,15 +60,36 @@
                             @if($item['mensaje'])
                                 <p class="text-xs text-slate-400 mt-1">{{ $item['mensaje'] }}</p>
                             @endif
+                            @foreach($item['visual'] ?? [] as $vista => $porcentaje)
+                                <div class="mt-2 text-xs text-slate-400">
+                                    <span class="font-semibold text-slate-300">{{ $vistas[$vista] ?? $vista }}:</span>
+                                    @if($porcentaje === null)
+                                        sin capturas
+                                    @else
+                                        <span class="{{ $porcentaje > \App\Webminder\Panel\Services\CapturasService::UMBRAL ? 'text-amber-300' : 'text-emerald-400' }}">{{ number_format($porcentaje, 1, ',', '.') }}% distinto</span>
+                                        · @foreach(['antes' => 'antes', 'despues' => 'después', 'diff' => 'cambios en rojo'] as $tipo => $etiqueta)
+                                            <a class="underline hover:text-slate-200" target="_blank" href="{{ route('webminder-panel.ejecuciones.captura', [$ejecucion, "{$loop->parent->parent->index}-{$vista}-{$tipo}.jpg"]) }}">{{ $etiqueta }}</a>{{ $loop->last ? '' : ' · ' }}
+                                        @endforeach
+                                    @endif
+                                </div>
+                            @endforeach
                         </div>
-                        <span class="text-xs font-semibold {{ $color }}">{{ $texto }}</span>
+                        <div class="flex flex-col items-end gap-2">
+                            <span class="text-xs font-semibold {{ $color }}">{{ $texto }}</span>
+                            @if($ejecucion->terminada() && !empty($item['backup']) && in_array($item['estado'], ['ok', 'ok_sin_verificar', 'cambio_visual'], true))
+                                <form method="POST" action="{{ route('webminder-panel.ejecuciones.revertir', [$ejecucion, $loop->index]) }}" onsubmit="return confirm(@js('¿Volver ' . $item['nombre'] . ' a la versión ' . $item['desde'] . '?'))">
+                                    @csrf
+                                    <button class="px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-semibold transition">Revertir a {{ $item['desde'] }}</button>
+                                </form>
+                            @endif
+                        </div>
                     </li>
                 @endforeach
             </ul>
         </flux:card>
     </div>
 
-    @unless($ejecucion->terminada())
+    @if(!$ejecucion->terminada() || $revirtiendo)
         <script>setTimeout(() => location.reload(), 4000);</script>
-    @endunless
+    @endif
 </x-layouts.panel>

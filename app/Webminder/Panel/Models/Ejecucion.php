@@ -35,11 +35,10 @@ class Ejecucion extends Model
     }
 
     /** Guarda el resultado de un ítem (se persiste al momento: la página de progreso lo lee). */
-    public function marcarItem(int $i, string $estado, ?string $mensaje = null): void
+    public function marcarItem(int $i, string $estado, ?string $mensaje = null, array $extra = []): void
     {
         $items = $this->items;
-        $items[$i]['estado'] = $estado;
-        $items[$i]['mensaje'] = $mensaje;
+        $items[$i] = array_merge($items[$i], $extra, ['estado' => $estado, 'mensaje' => $mensaje]);
         $this->update(['items' => $items]);
     }
 }
