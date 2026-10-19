@@ -12,8 +12,6 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        // Webminder: Interceptar requests para mostrar página de mantenimiento
-        $middleware->append(\App\Webminder\Http\Middleware\MaintenanceMode::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
