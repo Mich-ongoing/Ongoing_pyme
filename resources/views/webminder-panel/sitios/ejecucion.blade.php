@@ -25,6 +25,9 @@
 
         <flux:card class="bg-slate-950/60 border border-slate-800 p-6 rounded-2xl" role="status" aria-live="polite">
             <p class="text-sm text-slate-200 font-semibold">{{ $lote[$ejecucion->estado] ?? $ejecucion->estado }}</p>
+            @if($ejecucion->estado === 'en_curso' && $ejecucion->copia_bd && !$ejecucion->archivo_copia_bd)
+                <p class="text-sm text-indigo-400 mt-2">Copiando la base de datos… En sitios grandes tarda unos minutos.</p>
+            @endif
             @if($ejecucion->error)
                 <p class="text-sm text-rose-400 mt-2">{{ $ejecucion->error }}</p>
             @endif

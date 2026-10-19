@@ -36,7 +36,8 @@ global $wpdb;
 $wpdb->query(
     "DELETE FROM {$wpdb->options}
      WHERE option_name LIKE '\_transient\_ongoing\_sso\_token\_%'
-        OR option_name LIKE '\_transient\_timeout\_ongoing\_sso\_token\_%'"
+        OR option_name LIKE '\_transient\_timeout\_ongoing\_sso\_token\_%'
+        OR option_name LIKE 'ongoing\_webminder\_job\_%'"
 );
 
 // 3. Eliminar respaldos (archivos y copias de BD) en disco: la carpeta

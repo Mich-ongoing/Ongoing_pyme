@@ -9,6 +9,9 @@ sigue siendo autónomo: el worker solo lee su estado y lanza su revisión.
 - Panel → worker: `POST https://sitio/wp-json/webminder/v1/<endpoint>`, firma HMAC-SHA256 de
   `METODO\nruta\ntimestamp\ncuerpo` en `X-Webminder-Signature-V2` (+ `X-Webminder-Timestamp`).
   El worker rechaza firmas de más de 15 min y las repetidas (replay).
+- Operaciones largas (copia de BD, actualización, revisión de Cerrojo): el panel manda un `job`,
+  el worker (≥ 2.1) responde al momento y sigue en segundo plano; el panel consulta `/job` cada 5 s.
+  Así Cloudflare (corta a los 100 s con HTTP 524) no interrumpe nada.
 - Worker → panel: log de actividad a `POST /api/webminder/ingest`, misma firma, idempotente.
 - Autoactualización del worker: manifiesto y zip servidos por el panel en `/webminder/worker/`.
 - Mientras quede algún worker < 2.0 el panel envía también la firma v1 (ver `shortcut:` en

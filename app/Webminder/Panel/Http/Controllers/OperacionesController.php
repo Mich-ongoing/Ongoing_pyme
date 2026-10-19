@@ -82,7 +82,7 @@ class OperacionesController
      */
     public function revisionSeguridad(SitioWeb $sitio): RedirectResponse
     {
-        $resultado = $this->agente->hacerPeticion($sitio, 'security-scan', [], null, 600);
+        $resultado = $this->agente->peticionLarga($sitio, 'security-scan', [], 600);
 
         if (!$resultado['success']) {
             return back()->with('error', 'No se pudo revisar: ' . $resultado['error']);

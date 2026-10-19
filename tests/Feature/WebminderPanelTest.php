@@ -13,6 +13,7 @@ use App\Webminder\Panel\Services\AgenteComunicacionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Sleep;
 use Tests\TestCase;
 
 class WebminderPanelTest extends TestCase
@@ -26,6 +27,7 @@ class WebminderPanelTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        Sleep::fake();
         $cliente = Cliente::create(['nombre' => 'Ana', 'empresa' => 'ACME', 'email' => 'ana@acme.test']);
         $this->sitio = SitioWeb::create(['cliente_id' => $cliente->id, 'nombre' => 'ACME', 'url' => 'https://acme.test/', 'activo' => true, 'estado' => 'sin_verificar']);
         Credencial::create(['sitio_id' => $this->sitio->id, 'client_id' => 'webminder_1_abc', 'client_secret' => $this->secreto, 'activa' => true]);
@@ -68,7 +70,8 @@ class WebminderPanelTest extends TestCase
         $r = $this->agente()->ejecutarActualizacion($this->sitio, 'plugin', 'akismet/akismet.php');
 
         $this->assertFalse($r['success']);
-        Http::assertSentCount(1);
+        // Solo se consulta /job después; el /update no se repite
+        $this->assertCount(1, Http::recorded(fn (Request $req) => str_ends_with($req->url(), '/update')));
     }
 
     public function test_un_wp_error_se_convierte_en_fallo_con_su_mensaje(): void
@@ -197,6 +200,44 @@ class WebminderPanelTest extends TestCase
         $e->refresh();
         $this->assertSame('interrumpida', $e->estado);
         $this->assertSame(['error', 'omitido'], array_column($e->items, 'estado'));
+    }
+
+    public function test_la_copia_larga_tras_un_524_se_recoge_en_job(): void
+    {
+        $consultas = 0;
+        Http::fake(function (Request $req) use (&$consultas) {
+            return match (true) {
+                // Cloudflare corta el arranque, pero en el sitio la copia sigue
+                str_ends_with($req->url(), '/backup-db') => Http::response('<html>524</html>', 524),
+                str_ends_with($req->url(), '/job') => Http::response(++$consultas < 3
+                    ? ['success' => true, 'status' => 'running', 'started' => 1]
+                    : ['success' => true, 'status' => 'done', 'started' => 1, 'result' => ['success' => true, 'file' => 'wp-content/x/db.sql.gz']]),
+                str_ends_with($req->url(), '/update') => Http::response(['success' => true, 'status' => 'running', 'job' => $req->data()['job']]),
+                default => Http::response(['success' => true, 'data' => []]),
+            };
+        });
+        $e = $this->lote(['a/a.php']);
+
+        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class));
+
+        $e->refresh();
+        $this->assertSame('wp-content/x/db.sql.gz', $e->archivo_copia_bd);
+        $this->assertSame('completada', $e->estado);
+        Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/backup-db') && strlen($r->data()['job'] ?? '') === 32);
+    }
+
+    public function test_un_worker_sin_job_devuelve_su_respuesta_directa(): void
+    {
+        Http::fake(function (Request $req) {
+            return str_ends_with($req->url(), '/job')
+                ? Http::response(['code' => 'rest_no_route', 'message' => 'No route'], 404)
+                : Http::response('', 524);
+        });
+
+        $r = app(AgenteComunicacionService::class)->ejecutarActualizacion($this->sitio, 'plugin', 'a/a.php');
+
+        $this->assertFalse($r['success']);
+        $this->assertStringContainsString('HTTP 524', $r['error']);
     }
 
     public function test_las_pantallas_del_panel_cargan(): void

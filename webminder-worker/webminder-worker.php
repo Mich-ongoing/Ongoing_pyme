@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.0.0
+ * Version:     2.1.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.0.0';
+    const VERSION = '2.1.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -76,6 +76,7 @@ class WebminderAgent {
     const OPTION_PANEL_URL = 'ongoing_webminder_panel_url';
     const OPTION_UPDATE_LOCK = 'ongoing_webminder_update_lock';
     const OPTION_BACKUP_DIR = 'ongoing_webminder_backup_dir';
+    const OPTION_JOB_PREFIX = 'ongoing_webminder_job_';
 
     public function __construct() {
         register_activation_hook(__FILE__, [$this, 'activate']);
@@ -427,6 +428,13 @@ class WebminderAgent {
             'permission_callback' => [$this, 'verify_signature']
         ]);
 
+        // Resultado de una operación lanzada en segundo plano (ver in_background)
+        register_rest_route(self::API_NAMESPACE, '/job', [
+            'methods'             => 'POST',
+            'callback'            => [$this, 'handle_job'],
+            'permission_callback' => [$this, 'verify_signature']
+        ]);
+
         register_rest_route(self::API_NAMESPACE, '/backup-db', [
             'methods'             => 'POST',
             'callback'            => [$this, 'handle_backup_db'],
@@ -517,6 +525,9 @@ class WebminderAgent {
      * pisa pedidos/formularios recibidos desde la copia).
      */
     public function handle_backup_db(\WP_REST_Request $request) {
+        if ($bg = $this->in_background($request, __FUNCTION__)) {
+            return $bg;
+        }
         global $wpdb;
         if (!function_exists('gzopen')) {
             return new \WP_Error('no_zlib', 'PHP sin zlib: no se puede comprimir la copia.', ['status' => 500]);
@@ -576,6 +587,87 @@ class WebminderAgent {
     }
 
     /**
+     * Si el panel manda un 'job', la operación sigue en segundo plano tras
+     * responder: Cloudflare y otros proxys cortan a los 100 s (HTTP 524) y una
+     * copia de BD o una actualización con sus comprobaciones puede tardar más.
+     * El panel recoge el resultado en /job. Sin 'job' (panel < 2.1): síncrono.
+     * @return \WP_REST_Response|null
+     */
+    private function in_background(\WP_REST_Request $request, $method) {
+        $params = (array) $request->get_json_params();
+        $job = (string) ($params['job'] ?? '');
+        if (!preg_match('/^[A-Za-z0-9]{16,64}$/', $job)) {
+            return null;
+        }
+        $this->prune_jobs();
+        if (!add_option(self::OPTION_JOB_PREFIX . $job, ['status' => 'running', 'started' => time()], '', 'no')) {
+            return new \WP_Error('job_exists', 'Ese trabajo ya existe.', ['status' => 409]);
+        }
+        unset($params['job']);
+        $sync = clone $request;
+        $sync->set_body(wp_json_encode($params));
+
+        // Tarde en shutdown: después de que WordPress haya enviado la respuesta
+        add_action('shutdown', function () use ($job, $method, $sync) {
+            if (function_exists('fastcgi_finish_request')) {
+                fastcgi_finish_request();
+            } elseif (function_exists('litespeed_finish_request')) {
+                litespeed_finish_request();
+            }
+            ignore_user_abort(true);
+            @set_time_limit(0);
+            $name = self::OPTION_JOB_PREFIX . $job;
+            // Un fatal a mitad no pasa por el catch: dejar constancia para el panel
+            register_shutdown_function(function () use ($name) {
+                $state = get_option($name);
+                if (is_array($state) && $state['status'] === 'running') {
+                    $err = error_get_last();
+                    update_option($name, ['status' => 'done', 'started' => $state['started'], 'result' => [
+                        'success' => false,
+                        'error'   => 'El proceso en el sitio se cortó' . ($err ? ': ' . $err['message'] : '.'),
+                    ]], false);
+                }
+            });
+            try {
+                $r = $this->$method($sync);
+                $result = is_wp_error($r)
+                    ? ['success' => false, 'error' => $r->get_error_message(), 'code' => $r->get_error_code()]
+                    : rest_ensure_response($r)->get_data();
+            } catch (\Throwable $e) {
+                $result = ['success' => false, 'error' => 'Excepción: ' . $e->getMessage()];
+            }
+            $state = get_option($name);
+            update_option($name, ['status' => 'done', 'started' => $state['started'] ?? time(), 'result' => $result], false);
+        }, PHP_INT_MAX);
+
+        return rest_ensure_response(['success' => true, 'status' => 'running', 'job' => $job]);
+    }
+
+    public function handle_job(\WP_REST_Request $request) {
+        $job = (string) ($request->get_json_params()['job'] ?? '');
+        $state = preg_match('/^[A-Za-z0-9]{16,64}$/', $job) ? get_option(self::OPTION_JOB_PREFIX . $job) : false;
+        if (!is_array($state)) {
+            return rest_ensure_response(['success' => true, 'status' => 'unknown']);
+        }
+        return rest_ensure_response(['success' => true] + $state);
+    }
+
+    /** Fuera los resultados de más de un día: el panel los recoge en minutos. */
+    private function prune_jobs() {
+        global $wpdb;
+        $names = $wpdb->get_col($wpdb->prepare(
+            "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s",
+            $wpdb->esc_like(self::OPTION_JOB_PREFIX) . '%'
+        ));
+        foreach ($names as $name) {
+            $state = get_option($name);
+            if (!is_array($state) || ($state['started'] ?? 0) < time() - DAY_IN_SECONDS) {
+                delete_option($name);
+            }
+        }
+    }
+
+    /**
      * Estado de Cerrojo (mu-plugin de seguridad propio) si está instalado.
      * @return array<string,mixed>
      */
@@ -599,6 +691,9 @@ class WebminderAgent {
      * igual que en su revisión diaria (no tocar archivos legítimos a ciegas).
      */
     public function handle_security_scan(\WP_REST_Request $request) {
+        if ($bg = $this->in_background($request, __FUNCTION__)) {
+            return $bg;
+        }
         if (!function_exists('cerrojo_escanear') || !function_exists('cerrojo_vigilancia')) {
             return new \WP_Error('no_cerrojo', 'Cerrojo no está instalado en este sitio.', ['status' => 404]);
         }
@@ -1802,6 +1897,9 @@ class WebminderAgent {
      * Actualización Segura (File-Level Rollback)
      */
     public function handle_update_item(\WP_REST_Request $request) {
+        if ($bg = $this->in_background($request, __FUNCTION__)) {
+            return $bg;
+        }
         // Iniciar el buffer de salida para capturar cualquier echo o warning
         // que la clase upgrader de WordPress pueda soltar. Si esto se imprime,
         // rompe el JSON y el navegador lanza un falso error de CORS.

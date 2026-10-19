@@ -4,6 +4,8 @@ namespace App\Webminder\Panel\Services;
 
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Sleep;
+use Illuminate\Support\Str;
 use App\Webminder\Panel\Models\SitioWeb;
 use App\Webminder\Panel\Models\Credencial;
 use App\Webminder\Panel\Models\EstadoSitio;
@@ -26,7 +28,7 @@ class AgenteComunicacionService
      * Petición firmada a un worker. Nunca lanza: devuelve siempre un array con
      * 'success' y, si falla, 'error'.
      */
-    public function hacerPeticion(SitioWeb $sitio, string $endpoint, array $payload = [], ?string $secreto = null, int $timeout = 30): array
+    public function hacerPeticion(SitioWeb $sitio, string $endpoint, array $payload = [], ?string $secreto = null, int $timeout = 30, bool $auditar = true): array
     {
         $credencial = $sitio->credencial;
 
@@ -54,7 +56,7 @@ class AgenteComunicacionService
                 ->timeout($timeout)
                 ->post(rtrim($sitio->url, '/') . '/wp-json' . $ruta);
         } catch (ConnectionException $e) {
-            EventoAuditoria::registrarError('webminder_' . $endpoint, "Sin conexión con {$sitio->nombre}", $e->getMessage(), $sitio->id);
+            $auditar && EventoAuditoria::registrarError('webminder_' . $endpoint, "Sin conexión con {$sitio->nombre}", $e->getMessage(), $sitio->id);
 
             return ['success' => false, 'error' => 'Sin conexión: ' . $e->getMessage()];
         }
@@ -63,6 +65,9 @@ class AgenteComunicacionService
         $data = self::normalizar($response->json(), $response->status());
 
         $resumen = ['http' => $response->status(), 'mensaje' => $data['message'] ?? $data['error'] ?? null];
+        if (!$auditar) {
+            return $data;
+        }
         if ($data['success']) {
             EventoAuditoria::registrarExito('webminder_' . $endpoint, "Petición a {$endpoint}", $sitio->id, $resumen);
         } else {
@@ -70,6 +75,58 @@ class AgenteComunicacionService
         }
 
         return $data;
+    }
+
+    /**
+     * Operaciones largas (copia de BD, actualización, revisión). El worker ≥ 2.1
+     * responde al momento y sigue en segundo plano; aquí se consulta /job hasta
+     * tener el resultado. Cloudflare corta a los 100 s cualquier petición (HTTP 524).
+     * Un worker anterior ignora 'job' y contesta con el resultado directamente.
+     */
+    public function peticionLarga(SitioWeb $sitio, string $endpoint, array $payload, int $limite): array
+    {
+        $job = Str::random(32);
+        $inicio = $this->hacerPeticion($sitio, $endpoint, $payload + ['job' => $job], null, 90);
+        if (($inicio['status'] ?? null) !== 'running' && ($inicio['success'] || !self::sinRespuesta($inicio))) {
+            return $inicio;
+        }
+
+        // Si el arranque dio 524/timeout la operación puede estar en marcha igual: preguntar
+        $desconocido = $fallos = 0;
+        for ($i = 0; $i < intdiv($limite, 5); $i++) {
+            Sleep::for(5)->seconds();
+            $estado = $this->hacerPeticion($sitio, 'job', ['job' => $job], null, 30, false);
+            if (($estado['code'] ?? null) === 'rest_no_route') {
+                return $inicio; // worker < 2.1
+            }
+            if (!$estado['success']) {
+                // Unos segundos caído es normal (modo mantenimiento al actualizar); un minuto, no
+                if (++$fallos >= 12) {
+                    return ['success' => false, 'error' => "Sin conexión: el sitio no responde mientras hace {$endpoint}. Revísalo antes de seguir."];
+                }
+                continue;
+            }
+            $fallos = 0;
+            if (($estado['status'] ?? null) === 'done') {
+                $resultado = self::normalizar($estado['result'] ?? null, 200);
+                $resumen = ['mensaje' => $resultado['message'] ?? $resultado['error'] ?? null];
+                $resultado['success']
+                    ? EventoAuditoria::registrarExito('webminder_' . $endpoint, "Resultado de {$endpoint}", $sitio->id, $resumen)
+                    : EventoAuditoria::registrarError('webminder_' . $endpoint, "Resultado de {$endpoint}", (string) $resultado['error'], $sitio->id, $resumen);
+
+                return $resultado;
+            }
+            if (($estado['status'] ?? null) === 'unknown' && ++$desconocido >= 3) {
+                return $inicio; // nunca llegó a arrancar
+            }
+        }
+
+        return ['success' => false, 'error' => "Sin conexión: el sitio no terminó {$endpoint} en {$limite} s. Revisa el sitio antes de seguir."];
+    }
+
+    private static function sinRespuesta(array $r): bool
+    {
+        return Str::startsWith((string) ($r['error'] ?? ''), ['Sin conexión', 'Respuesta no válida']);
     }
 
     /**
@@ -172,7 +229,7 @@ class AgenteComunicacionService
      */
     public function ejecutarActualizacion(SitioWeb $sitio, string $tipo, string $item, array $extra = []): array
     {
-        return $this->hacerPeticion($sitio, 'update', ['type' => $tipo, 'item' => $item] + $extra, null, 300);
+        return $this->peticionLarga($sitio, 'update', ['type' => $tipo, 'item' => $item] + $extra, 900);
     }
 
     public function obtenerPaquetes(SitioWeb $sitio): array

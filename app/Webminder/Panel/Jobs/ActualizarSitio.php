@@ -47,7 +47,7 @@ class ActualizarSitio implements ShouldQueue
         $ejecucion->update(['estado' => 'en_curso', 'iniciada_en' => now()]);
 
         if ($ejecucion->copia_bd) {
-            $copia = $agente->hacerPeticion($sitio, 'backup-db', [], null, 900);
+            $copia = $agente->peticionLarga($sitio, 'backup-db', [], 1200);
             if (!$copia['success']) {
                 $this->terminar($ejecucion, 'interrumpida', 'No se pudo copiar la base de datos; no se ha actualizado nada: ' . $copia['error']);
 
