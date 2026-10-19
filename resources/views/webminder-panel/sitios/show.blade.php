@@ -1,0 +1,324 @@
+<x-layouts.panel title="Sitio: {{ $sitio->nombre }} - Webminder Panel" headerTitle="{{ $sitio->nombre }}" headerSubtitle="Detalles técnicos, auditoría de seguridad WordPress e inventario">
+
+    @php
+        $seguridad = $estado_actual?->seguridad() ?? [];
+        $score = $estado_actual?->puntuacionSeguridad() ?? 100;
+        $admins = $estado_actual?->usuariosAdmin() ?? [];
+        $plugins = $estado_actual?->plugins() ?? [];
+        $temas = $estado_actual?->temas() ?? [];
+        $entorno = $estado_actual?->entorno() ?? [];
+    @endphp
+
+    <!-- Header Action Banner -->
+    <flux:card class="bg-slate-950/60 border border-slate-800 p-6 rounded-2xl mb-8">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+            <div>
+                <div class="flex items-center gap-3 mb-2">
+                    <h1 class="text-2xl font-bold text-slate-100">{{ $sitio->nombre }}</h1>
+                    @if(strtolower($sitio->estado) == 'online')
+                        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> ONLINE
+                        </span>
+                    @else
+                        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                            OFFLINE
+                        </span>
+                    @endif
+                </div>
+                <div class="flex flex-wrap items-center gap-4 text-xs text-slate-400">
+                    <span class="flex items-center gap-1">🌐 <a href="{{ $sitio->url }}" target="_blank" class="text-indigo-400 hover:underline">{{ $sitio->url }}</a></span>
+                    <span>🏢 Cliente: <strong class="text-slate-200">{{ $sitio->cliente->nombre }}</strong></span>
+                    <span>⚙️ Tecnología: <strong class="text-slate-200">{{ $sitio->tecnologia ?? 'WordPress' }} {{ $estado_actual?->datos['wp_version'] ? 'v'.$estado_actual->datos['wp_version'] : '' }}</strong></span>
+                    <span>🕒 Verificación: {{ $sitio->ultima_verificacion?->diffForHumans() ?? 'Nunca' }}</span>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="flex flex-wrap gap-2.5">
+                <a href="/webminder-panel/sitios/{{ $sitio->id }}/verificar" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/20 transition">
+                    🔄 Verificar Estado
+                </a>
+                @if($sitio->enMantenimiento())
+                    <form action="/webminder-panel/operaciones/{{ $sitio->id }}/mantenimiento-off" method="POST" class="m-0">
+                        @csrf
+                        <button type="submit" class="px-4 py-2 rounded-xl bg-amber-500/20 border border-amber-500/30 text-amber-300 hover:bg-amber-500/30 text-xs font-semibold transition cursor-pointer">
+                            🔓 Desactivar Mantenimiento
+                        </button>
+                    </form>
+                @else
+                    <form action="/webminder-panel/operaciones/{{ $sitio->id }}/mantenimiento-on" method="POST" class="m-0">
+                        @csrf
+                        <button type="submit" class="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer">
+                            🔒 Modo Mantenimiento
+                        </button>
+                    </form>
+                @endif
+                <a href="/webminder-panel/sitios/{{ $sitio->id }}/credenciales" class="inline-flex items-center px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition">
+                    🔑 Credenciales API
+                </a>
+            </div>
+        </div>
+    </flux:card>
+
+    <!-- Overview Stat Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
+        <!-- Card 1: Score de Seguridad -->
+        <flux:card class="bg-slate-950/60 border border-slate-800 p-5 rounded-2xl">
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Seguridad</p>
+            <h3 class="text-3xl font-bold mt-1 {{ $score >= 80 ? 'text-emerald-400' : ($score >= 50 ? 'text-amber-400' : 'text-rose-400') }}">
+                {{ $score }}%
+            </h3>
+            <p class="text-xs text-slate-400 mt-2">
+                @if($score >= 80) ✅ Nivel Seguro @elseif($score >= 50) ⚠️ Requiere atención @else ❌ Riesgo Alto @endif
+            </p>
+        </flux:card>
+
+        <!-- Card 2: Actualizaciones -->
+        <flux:card class="bg-slate-950/60 border border-slate-800 p-5 rounded-2xl">
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Actualizaciones</p>
+            <h3 class="text-3xl font-bold mt-1 {{ ($estado_actual?->datos['updates_pending'] ?? 0) > 0 ? 'text-amber-400' : 'text-emerald-400' }}">
+                {{ $estado_actual?->datos['updates_pending'] ?? 0 }}
+            </h3>
+            <p class="text-xs text-slate-400 mt-2">Plugins y temas pendientes</p>
+        </flux:card>
+
+        <!-- Card 3: Administradores -->
+        <flux:card class="bg-slate-950/60 border border-slate-800 p-5 rounded-2xl">
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Administradores</p>
+            <h3 class="text-3xl font-bold text-slate-100 mt-1">
+                {{ count($admins) ?: ($estado_actual?->datos['admin_count'] ?? 0) }}
+            </h3>
+            <p class="text-xs mt-2 {{ ($seguridad['insecure_admin_exists'] ?? false) ? 'text-rose-400 font-semibold' : 'text-slate-400' }}">
+                @if($seguridad['insecure_admin_exists'] ?? false) ⚠️ Usuario 'admin' activo @else ✓ Cuentas administrativas @endif
+            </p>
+        </flux:card>
+
+        <!-- Card 4: Total Plugins -->
+        <flux:card class="bg-slate-950/60 border border-slate-800 p-5 rounded-2xl">
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Plugins</p>
+            <h3 class="text-3xl font-bold text-indigo-400 mt-1">
+                {{ count($plugins) ?: ($estado_actual?->datos['total_plugins'] ?? 0) }}
+            </h3>
+            <p class="text-xs text-slate-400 mt-2">{{ $estado_actual?->datos['active_plugins'] ?? 0 }} activos</p>
+        </flux:card>
+
+        <!-- Card 5: Base de Datos -->
+        <flux:card class="bg-slate-950/60 border border-slate-800 p-5 rounded-2xl">
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Base de Datos</p>
+            <h3 class="text-3xl font-bold text-slate-100 mt-1">
+                {{ number_format($estado_actual?->tamañoBD() ?? 0, 1) }} MB
+            </h3>
+            <p class="text-xs text-slate-400 mt-2">Prefijo: <code class="text-indigo-400">{{ $entorno['db_prefix'] ?? 'wp_' }}</code></p>
+        </flux:card>
+    </div>
+
+    <!-- Section 1: Security Audit Checklist -->
+    <flux:card class="bg-slate-950/60 border border-slate-800 p-6 rounded-2xl mb-8">
+        <div class="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
+            <div>
+                <flux:heading size="lg" class="text-slate-100 font-bold">🛡️ Auditoría de Seguridad WordPress</flux:heading>
+                <flux:subheading class="text-slate-400 text-xs">Evaluación de configuraciones críticas y vulnerabilidades conocidas</flux:subheading>
+            </div>
+            <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold {{ $score >= 80 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20' }}">
+                Puntuación: {{ $score }}/100
+            </span>
+        </div>
+
+        @if(!empty($seguridad['checks']))
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                @foreach($seguridad['checks'] as $check)
+                    <div class="p-4 rounded-xl border {{ $check['status'] == 'pass' ? 'bg-emerald-500/5 border-emerald-500/20' : ($check['status'] == 'warning' ? 'bg-amber-500/5 border-amber-500/20' : 'bg-rose-500/5 border-rose-500/20') }} flex gap-3.5 items-start">
+                        <div class="text-xl shrink-0 mt-0.5">
+                            @if($check['status'] == 'pass') ✅ @elseif($check['status'] == 'warning') ⚠️ @else ❌ @endif
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-semibold text-slate-200">{{ $check['label'] }}</h4>
+                            <p class="text-xs text-slate-400 mt-1">{{ $check['message'] }}</p>
+                        </div>
+                    </div>
+                @endforeach
+            </div>
+        @else
+            <p class="text-sm text-slate-500">Haz clic en "Verificar Estado" para ejecutar la auditoría de seguridad completa de este sitio.</p>
+        @endif
+    </flux:card>
+
+    <!-- Grid: Admin Users & Environment -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+        <!-- Section 2: Admin Users -->
+        <flux:card class="bg-slate-950/60 border border-slate-800 p-6 rounded-2xl">
+            <div class="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
+                <flux:heading size="lg" class="text-slate-100 font-bold">👥 Cuentas de Administrador ({{ count($admins) }})</flux:heading>
+            </div>
+            @if(!empty($admins))
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm text-slate-300">
+                        <thead class="bg-slate-900/80 text-xs uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                            <tr>
+                                <th class="py-3 px-4 font-semibold">Usuario</th>
+                                <th class="py-3 px-4 font-semibold">Email</th>
+                                <th class="py-3 px-4 font-semibold">Seguridad</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800/60">
+                            @foreach($admins as $admin)
+                                <tr class="hover:bg-slate-900/40">
+                                    <td class="py-3 px-4 font-medium text-slate-100">
+                                        {{ $admin['display_name'] }}
+                                        <p class="text-xs text-slate-500 font-normal">@ {{ $admin['username'] }}</p>
+                                    </td>
+                                    <td class="py-3 px-4 text-xs text-slate-400">{{ $admin['email'] }}</td>
+                                    <td class="py-3 px-4">
+                                        @if($admin['is_insecure'])
+                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                                                ⚠️ Nombre Inseguro
+                                            </span>
+                                        @else
+                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                                ✓ Seguro
+                                            </span>
+                                        @endif
+                                    </td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+            @else
+                <p class="text-sm text-slate-500">No hay lista de administradores cargada aún.</p>
+            @endif
+        </flux:card>
+
+        <!-- Section 3: Environment Info -->
+        <flux:card class="bg-slate-950/60 border border-slate-800 p-6 rounded-2xl">
+            <div class="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
+                <flux:heading size="lg" class="text-slate-100 font-bold">🖥️ Servidor y Entorno PHP/MySQL</flux:heading>
+            </div>
+            <ul class="divide-y divide-slate-800/60 text-sm text-slate-300">
+                <li class="py-2.5 flex justify-between">
+                    <span class="text-slate-400">Versión de PHP</span>
+                    <span class="font-medium text-slate-100">{{ $entorno['php_version'] ?? ($estado_actual?->datos['php_version'] ?? 'N/A') }}</span>
+                </li>
+                <li class="py-2.5 flex justify-between">
+                    <span class="text-slate-400">Versión de Base de Datos</span>
+                    <span class="font-medium text-slate-100">{{ $entorno['db_version'] ?? 'N/A' }}</span>
+                </li>
+                <li class="py-2.5 flex justify-between">
+                    <span class="text-slate-400">Límite de Memoria PHP</span>
+                    <span class="font-medium text-indigo-400">{{ $entorno['memory_limit'] ?? ($estado_actual?->datos['memory_limit'] ?? 'N/A') }}</span>
+                </li>
+                <li class="py-2.5 flex justify-between">
+                    <span class="text-slate-400">Tamaño Máximo de Subida</span>
+                    <span class="font-medium text-slate-100">{{ $entorno['upload_max_filesize'] ?? 'N/A' }}</span>
+                </li>
+                <li class="py-2.5 flex justify-between">
+                    <span class="text-slate-400">Tiempo Máximo de Ejecución</span>
+                    <span class="font-medium text-slate-100">{{ $entorno['max_execution_time'] ?? 'N/A' }}s</span>
+                </li>
+                <li class="py-2.5 flex justify-between">
+                    <span class="text-slate-400">Prefijo de Tablas DB</span>
+                    <code class="text-indigo-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">{{ $entorno['db_prefix'] ?? 'wp_' }}</code>
+                </li>
+            </ul>
+        </flux:card>
+    </div>
+
+    <!-- Section 4: Plugins Table -->
+    <flux:card class="bg-slate-950/60 border border-slate-800 p-6 rounded-2xl mb-8">
+        <div class="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
+            <div>
+                <flux:heading size="lg" class="text-slate-100 font-bold">🔄 Inventario de Plugins ({{ count($plugins) }})</flux:heading>
+                <flux:subheading class="text-slate-400 text-xs">Plugins instalados y estado de actualizaciones pendientes</flux:subheading>
+            </div>
+        </div>
+
+        @if(!empty($plugins))
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm text-slate-300">
+                    <thead class="bg-slate-900/80 text-xs uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                        <tr>
+                            <th class="py-3.5 px-4 font-semibold">Plugin</th>
+                            <th class="py-3.5 px-4 font-semibold">Versión Instalada</th>
+                            <th class="py-3.5 px-4 font-semibold">Estado</th>
+                            <th class="py-3.5 px-4 font-semibold">Actualización</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-800/60">
+                        @foreach($plugins as $plugin)
+                            <tr class="hover:bg-slate-900/40">
+                                <td class="py-3.5 px-4 font-medium text-slate-100">
+                                    {{ $plugin['name'] }}
+                                    <p class="text-xs text-slate-500 font-normal">{{ $plugin['author'] }}</p>
+                                </td>
+                                <td class="py-3.5 px-4"><code class="bg-slate-900 text-slate-300 px-2 py-1 rounded text-xs border border-slate-800">{{ $plugin['version'] }}</code></td>
+                                <td class="py-3.5 px-4">
+                                    @if($plugin['active'])
+                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Activo</span>
+                                    @else
+                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-400">Inactivo</span>
+                                    @endif
+                                </td>
+                                <td class="py-3.5 px-4">
+                                    @if($plugin['update_available'])
+                                        <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                                            ⚠️ Nueva v{{ $plugin['new_version'] }}
+                                        </span>
+                                    @else
+                                        <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                            ✓ Al día
+                                        </span>
+                                    @endif
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+        @else
+            <p class="text-sm text-slate-500">No hay inventario de plugins cargado aún.</p>
+        @endif
+    </flux:card>
+
+    <!-- Section 5: Audit Log Events -->
+    <flux:card class="bg-slate-950/60 border border-slate-800 p-6 rounded-2xl">
+        <div class="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
+            <flux:heading size="lg" class="text-slate-100 font-bold">📜 Historial de Operaciones del Sitio</flux:heading>
+        </div>
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm text-slate-300">
+                <thead class="bg-slate-900/80 text-xs uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                    <tr>
+                        <th class="py-3.5 px-4 font-semibold">Acción</th>
+                        <th class="py-3.5 px-4 font-semibold">Mensaje</th>
+                        <th class="py-3.5 px-4 font-semibold">Resultado</th>
+                        <th class="py-3.5 px-4 font-semibold">Fecha</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800/60">
+                    @forelse($eventos as $evento)
+                        <tr class="hover:bg-slate-900/40">
+                            <td class="py-3.5 px-4 font-semibold text-slate-200">
+                                {{ \App\Webminder\Panel\Models\EventoAuditoria::getAccionLabel($evento->accion) }}
+                            </td>
+                            <td class="py-3.5 px-4 text-slate-300">{{ $evento->mensaje }}</td>
+                            <td class="py-3.5 px-4">
+                                @if($evento->resultado == 'exito')
+                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">ÉXITO</span>
+                                @else
+                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">ERROR</span>
+                                @endif
+                            </td>
+                            <td class="py-3.5 px-4 text-xs text-slate-400">{{ $evento->created_at->diffForHumans() }}</td>
+                        </tr>
+                    @empty
+                        <tr>
+                            <td colspan="4" class="py-8 text-center text-slate-500">No hay eventos registrados para este sitio.</td>
+                        </tr>
+                    @endforelse
+                </tbody>
+            </table>
+        </div>
+    </flux:card>
+
+</x-layouts.panel>

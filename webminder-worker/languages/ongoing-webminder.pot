@@ -1,0 +1,64 @@
+# Copyright (C) 2026 ONGOING DIGITAL SL
+# This file is distributed under the same license as the Ongoing - Mantenimiento Web plugin.
+msgid ""
+msgstr ""
+"Project-Id-Version: Ongoing - Mantenimiento Web 1.25\n"
+"Report-Msgid-Bugs-To: https://ongoing.es\n"
+"Language-Team: ONGOING DIGITAL SL <soporte@ongoing.es>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Domain: ongoing-webminder\n"
+
+msgid "Mantenimiento"
+msgstr ""
+
+msgid "Mantenimiento Web"
+msgstr ""
+
+msgid "Plataforma de gestión"
+msgstr ""
+
+msgid "Conectado exitosamente"
+msgstr ""
+
+msgid "Sin conexión — copia tu clave de enlace"
+msgstr ""
+
+msgid "Conexión Segura Establecida"
+msgstr ""
+
+#. translators: %s: nombre de la empresa
+msgid "Este sitio web está recibiendo los servicios de mantenimiento y soporte web contratados por parte de %s."
+msgstr ""
+
+msgid "El agente está operando de forma 100% invisible para sus visitantes, garantizando la salud, seguridad y actualización constante de su plataforma sin afectar el rendimiento."
+msgstr ""
+
+#. translators: %s: tiempo transcurrido, p. ej. "5 minutos"
+msgid "Última verificación de salud del sitio: Hace %s."
+msgstr ""
+
+msgid "Clave de Enlace Técnico"
+msgstr ""
+
+msgid "Este código permite que nuestro equipo conecte el sitio de forma segura a la plataforma central."
+msgstr ""
+
+msgid "Copiar código"
+msgstr ""
+
+msgid "¡Copiado correctamente!"
+msgstr ""
+
+msgid "No se pudo copiar el texto. Intenta seleccionar y copiar manualmente."
+msgstr ""
+
+msgid "En mantenimiento"
+msgstr ""
+
+msgid "En mantenimiento, volvemos en breve."
+msgstr ""
+
+msgid "Estamos haciendo algunos ajustes."
+msgstr ""
