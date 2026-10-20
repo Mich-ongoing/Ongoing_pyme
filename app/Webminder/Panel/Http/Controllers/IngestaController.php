@@ -5,6 +5,7 @@ namespace App\Webminder\Panel\Http\Controllers;
 use App\Webminder\Panel\Models\Credencial;
 use App\Webminder\Panel\Models\EventoActividad;
 use App\Webminder\Panel\Services\AgenteComunicacionService;
+use App\Webminder\Panel\Services\InjertoService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -63,6 +64,13 @@ class IngestaController
         }
         // insertOrIgnore: un reenvío del mismo lote no duplica (unique sitio_id+local_id)
         EventoActividad::insertOrIgnore($filas);
+
+        // Injerto pide aprobar código: llega como evento del log de actividad
+        foreach ($request->input('events') as $e) {
+            if ($e['action'] === 'injerto_solicitud' && is_array($e['details'] ?? null)) {
+                app(InjertoService::class)->recibir($credencial->sitio_id, $e['details']);
+            }
+        }
 
         return response()->json(['success' => true, 'accepted' => array_column($filas, 'local_id')]);
     }

@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.3.1
+ * Version:     2.4.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.3.1';
+    const VERSION = '2.4.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -83,6 +83,15 @@ class WebminderAgent {
         add_action('admin_menu', [$this, 'add_admin_menu']);
         add_action('rest_api_init', [$this, 'register_routes']);
         add_action('init', [$this, 'load_textdomain']);
+        // Injerto pide aprobaciones al panel por el log de actividad (crítico = se envía al momento)
+        add_filter('injerto_worker_conectado', function () {
+            return get_option(self::OPTION_CLIENT_ID) && get_option(self::OPTION_CLIENT_SECRET) && get_option(self::OPTION_PANEL_URL);
+        });
+        add_action('injerto_solicitud', function ($solicitud) {
+            WebminderActivityLog::instance()->log('injerto_solicitud', [
+                'severity' => 'critical', 'object_type' => 'injerto', 'object_name' => $solicitud['ambito_nombre'] ?? '', 'details' => $solicitud,
+            ]);
+        });
         // Migraciones idempotentes. También en rest_api_init: tras un
         // update lanzado desde el panel puede que nadie visite wp-admin,
         // pero el panel sí llama a /status (y la tabla de actividad debe
@@ -495,6 +504,12 @@ class WebminderAgent {
             'permission_callback' => [$this, 'verify_signature']
         ]);
 
+        register_rest_route(self::API_NAMESPACE, '/injerto', [
+            'methods'             => 'POST',
+            'callback'            => [$this, 'handle_injerto'],
+            'permission_callback' => [$this, 'verify_signature']
+        ]);
+
         register_rest_route(self::API_NAMESPACE, '/ping', [
             'methods'             => 'GET',
             'callback'            => [$this, 'handle_ping'],
@@ -797,6 +812,18 @@ class WebminderAgent {
      * Estado de Cerrojo (mu-plugin de seguridad propio) si está instalado.
      * @return array<string,mixed>
      */
+    /**
+     * Decisión del panel sobre una solicitud de Injerto. Injerto comprueba la firma
+     * Ed25519 con su clave pública: esta petición (firmada con el secreto del sitio,
+     * que está en la BD) no basta por sí sola para publicar nada.
+     */
+    public function handle_injerto(\WP_REST_Request $request) {
+        if (!function_exists('injerto_aplicar_decision')) {
+            return new \WP_Error('no_injerto', 'Injerto no está activo en este sitio.', ['status' => 404]);
+        }
+        return rest_ensure_response(injerto_aplicar_decision((array) $request->get_json_params()));
+    }
+
     private function cerrojo_info() {
         if (!function_exists('cerrojo_vigilancia')) {
             return ['installed' => false];
@@ -1395,6 +1422,8 @@ class WebminderAgent {
             'environment' => $this->get_environment_info(),
             'site_health_summary' => ($site_health = $this->run_site_health()) ? ($site_health['summary'] ?? []) : [],
             'cerrojo' => $this->cerrojo_info(),
+            // El panel vigila los scripts de la portada de las webs con Injerto
+            'injerto' => defined('INJERTO_VERSION') ? ['version' => INJERTO_VERSION] : null,
         ];
 
         // Flush oportunista del log de actividad: aprovecha el tráfico

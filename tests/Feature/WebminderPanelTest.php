@@ -11,6 +11,8 @@ use App\Models\User;
 use App\Webminder\Panel\Models\SitioWeb;
 use App\Webminder\Panel\Services\AgenteComunicacionService;
 use App\Webminder\Panel\Services\CapturasService;
+use App\Webminder\Panel\Services\InjertoService;
+use App\Webminder\Panel\Models\InjertoSolicitud;
 use App\Webminder\Panel\Jobs\RevertirItem;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -490,5 +492,103 @@ class WebminderPanelTest extends TestCase
         $this->assertSame(['error', 'pendiente'], array_column($e->items, 'estado'));
         $asuntos = array_map(fn ($c) => $c->getSubject(), $this->correos());
         $this->assertSame(['watchWP · ⚠ Actualización interrumpida en ACME', 'watchWP · Informe de mantenimiento 2026-10-20'], $asuntos);
+    }
+
+    /** Par de claves fijo de pruebas (el mismo que usa la prueba del plugin Injerto). */
+    private function clavesInjerto(): string
+    {
+        $par = sodium_crypto_sign_seed_keypair(str_repeat('p', 32));
+        config(['services.injerto.clave_privada' => base64_encode(sodium_crypto_sign_secretkey($par)),
+            'services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
+
+        return sodium_crypto_sign_publickey($par);
+    }
+
+    public function test_la_firma_del_panel_sigue_el_formato_que_comprueba_injerto(): void
+    {
+        $publica = $this->clavesInjerto();
+
+        $firma = InjertoService::firmar(0, ['head' => '<meta name="x">']);
+
+        // Mismo literal que en la prueba del plugin: si cambia el formato, fallan los dos
+        $mensaje = 'injerto|0|{"head":"<meta name=\"x\">","body":"","footer":"","jsonld":""}';
+        $this->assertTrue(sodium_crypto_sign_verify_detached(base64_decode($firma), $mensaje, $publica));
+    }
+
+    public function test_una_solicitud_de_injerto_llega_por_la_ingesta_y_avisa_una_vez(): void
+    {
+        $this->clavesInjerto();
+        $evento = ['local_id' => 9, 'occurred_at' => '2026-10-20T10:00:00Z', 'action' => 'injerto_solicitud', 'severity' => 'critical', 'details' => [
+            'id' => 'abc123', 'ambito' => 0, 'ambito_nombre' => 'toda la web', 'usuario' => 'ana <ana@acme.test>', 'ip' => '1.2.3.4',
+            'valores' => ['footer' => '<script src="https://evil.example/x.js"></script><script>eval(atob("x"))</script>'], 'anteriores' => [],
+        ]];
+
+        $this->ingesta([$evento])->assertOk();
+        $this->ingesta([$evento])->assertOk(); // reenvío del worker
+
+        $s = InjertoSolicitud::sole();
+        $this->assertSame('pendiente', $s->estado);
+        [$correo] = $this->correos();
+        $this->assertStringContainsString('evil.example', $correo->getTextBody());
+        $this->assertStringContainsString('⚠ ATENCIÓN, contiene: eval(, atob(', $correo->getTextBody());
+        $this->assertStringContainsString(route('webminder-panel.injerto.show', $s), $correo->getTextBody());
+        $this->assertCount(1, $this->correos());
+    }
+
+    public function test_aprobar_envia_el_codigo_firmado_a_la_web_y_acepta_sus_dominios(): void
+    {
+        $publica = $this->clavesInjerto();
+        Http::fake(['acme.test/*' => Http::response(['success' => true])]);
+        $s = InjertoSolicitud::create(['sitio_id' => $this->sitio->id, 'remoto_id' => 'abc123', 'ambito' => 5, 'ambito_nombre' => 'Inicio',
+            'valores' => InjertoService::normalizar(['head' => '<script src="https://www.googletagmanager.com/gtm.js"></script>'])]);
+        $usuario = User::factory()->create();
+
+        $this->actingAs($usuario)->post(route('webminder-panel.injerto.aprobar', $s))->assertRedirect();
+
+        Http::assertSent(fn (Request $req) => str_ends_with($req->url(), '/injerto') && $req['aprobar'] === true && $req['id'] === 'abc123'
+            && sodium_crypto_sign_verify_detached(base64_decode($req['firma']), InjertoService::mensaje(5, $req['valores']), $publica));
+        $this->assertSame('aprobada', $s->refresh()->estado);
+        $this->assertSame($usuario->id, $s->decidida_por);
+        $this->assertContains('www.googletagmanager.com', $this->sitio->refresh()->dominios_scripts['conocidos']);
+        $this->actingAs($usuario)->post(route('webminder-panel.injerto.rechazar', $s))->assertStatus(409);
+    }
+
+    public function test_la_vigilancia_avisa_de_un_dominio_de_script_nuevo_solo_en_webs_con_injerto(): void
+    {
+        config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
+        $base = '<html><head><script src="https://acme.test/wp-includes/x.js"></script><script src="https://www.googletagmanager.com/gtm.js"></script>'
+            . '<script type="application/ld+json">{"sameAs":"https://facebook.com/acme"}</script><script>var c={"u":"https:\/\/acme.test\/a"};</script></head></html>';
+        $inyectado = str_replace('</head>', '<script>var s=document.createElement("script");s.src="https:\/\/cdn-robo.example\/s.js";</script></head>', $base);
+        Http::fake(['acme.test/*' => Http::sequence()->push($base)->push($inyectado)->push($inyectado)]);
+        $this->sitio->update(['tiene_injerto' => true]);
+
+        $this->artisan('webminder:vigilar');
+        $this->assertSame(['www.googletagmanager.com'], $this->sitio->refresh()->dominios_scripts['conocidos']); // ni la propia web ni el JSON-LD
+        $this->assertSame([], $this->correos());
+
+        $this->artisan('webminder:vigilar');
+        $this->artisan('webminder:vigilar'); // sigue ahí: no repite el aviso
+        $correos = $this->correos();
+        $this->assertCount(1, $correos);
+        $this->assertStringContainsString('cdn-robo.example', $correos[0]->getTextBody());
+
+        $usuario = User::factory()->create();
+        $this->actingAs($usuario)->get(route('webminder-panel.injerto.index'))->assertOk()->assertSee('cdn-robo.example');
+        $this->actingAs($usuario)->post(route('webminder-panel.injerto.dominio', $this->sitio), ['dominio' => 'cdn-robo.example', 'accion' => 'aceptar']);
+        $this->assertSame([], $this->sitio->refresh()->dominios_scripts['avisados']);
+
+        $this->sitio->update(['tiene_injerto' => false, 'dominios_scripts' => null]);
+        Http::fake(['acme.test/*' => Http::response($inyectado)]);
+        $this->artisan('webminder:vigilar');
+        $this->assertNull($this->sitio->refresh()->dominios_scripts); // sin Injerto no se vigila
+    }
+
+    public function test_la_pagina_de_una_solicitud_se_ve_con_su_codigo(): void
+    {
+        $s = InjertoSolicitud::create(['sitio_id' => $this->sitio->id, 'remoto_id' => 'abc', 'ambito' => 0, 'ambito_nombre' => 'toda la web',
+            'valores' => InjertoService::normalizar(['body' => '<noscript>gtm</noscript>'])]);
+
+        $this->actingAs(User::factory()->create())->get(route('webminder-panel.injerto.show', $s))
+            ->assertOk()->assertSee('Aprobar y publicar')->assertSee('&lt;noscript&gt;gtm', false);
     }
 }

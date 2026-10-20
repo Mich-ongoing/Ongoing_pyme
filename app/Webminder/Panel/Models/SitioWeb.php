@@ -27,6 +27,8 @@ class SitioWeb extends Model
         'ultima_verificacion',
         'proxima_verificacion',
         'caida_desde',
+        'tiene_injerto',
+        'dominios_scripts',
     ];
 
     protected $casts = [
@@ -34,6 +36,8 @@ class SitioWeb extends Model
         'ultima_verificacion' => 'datetime',
         'proxima_verificacion' => 'datetime',
         'caida_desde' => 'datetime',
+        'tiene_injerto' => 'boolean',
+        'dominios_scripts' => 'array',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];

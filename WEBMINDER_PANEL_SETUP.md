@@ -83,6 +83,19 @@ Paid (5 $/mes) no hay límite diario.
   ```
   Probar con `php artisan webminder:probar-correo` (Laravel Toolkit → Artisan).
 
+## Injerto (aprobación de código y vigilancia de scripts)
+
+- El plugin Injerto (`~/Projects/injerto`, fuera de este repo) no publica nada sin una firma
+  Ed25519 del panel. Guardar en la web → el worker (≥ 2.4.0) lo manda como evento crítico
+  `injerto_solicitud` por la ingesta → aparece en **Injerto** del panel y se avisa a
+  `WEBMINDER_AVISOS_EMAIL` → al aprobar, el panel firma y lo envía a `/injerto` del worker.
+- Clave privada: `WEBMINDER_INJERTO_CLAVE` en el `.env` (copia en `~/.ssh/watchwp-injerto.key`
+  de Michell). La pública está escrita en el plugin (`INJERTO_CLAVE_PUBLICA`). Si se pierde la
+  privada: `php artisan webminder:injerto-claves`, nueva pública en el plugin y reaprobar todo.
+- Vigilancia: en las webs con Injerto (`tiene_injerto`, sale del /status horario), `webminder:vigilar`
+  apunta los dominios externos de los scripts de la portada. La primera vez es la referencia; un
+  dominio nuevo no aprobado avisa una vez y queda en **Injerto** para aceptarlo u olvidarlo.
+
 ## Pruebas
 
 - Panel: `ddev artisan test`.

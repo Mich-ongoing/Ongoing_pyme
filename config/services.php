@@ -39,6 +39,12 @@ return [
         'email' => env('WEBMINDER_AVISOS_EMAIL'),
     ],
 
+    // Injerto: clave privada Ed25519 (base64) con la que el panel firma el código aprobado.
+    // Las webs solo tienen la pública: aunque roben sus archivos o su BD, no pueden firmar.
+    'injerto' => [
+        'clave_privada' => env('WEBMINDER_INJERTO_CLAVE'),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

@@ -188,6 +188,7 @@ class AgenteComunicacionService
                 'estado' => $estado,
                 'ultima_verificacion' => now(),
                 'version_php' => $datos['php_version'] ?? null,
+                'tiene_injerto' => !empty($datos['injerto']), // activa la vigilancia de scripts
             ]);
         } else {
             $sitio->update(['estado' => 'offline', 'ultima_verificacion' => now()]);
@@ -244,6 +245,12 @@ class AgenteComunicacionService
     public function ejecutarActualizacion(SitioWeb $sitio, string $tipo, string $item, array $extra = [], ?callable $alProgresar = null, ?string $job = null, bool $reanudar = false): array
     {
         return $this->peticionLarga($sitio, 'update', ['type' => $tipo, 'item' => $item] + $extra, 900, $alProgresar, $job, $reanudar);
+    }
+
+    /** Decisión sobre una solicitud de Injerto: publica el código con su firma o la descarta. */
+    public function injerto(SitioWeb $sitio, array $decision): array
+    {
+        return $this->hacerPeticion($sitio, 'injerto', $decision);
     }
 
     public function obtenerPaquetes(SitioWeb $sitio): array

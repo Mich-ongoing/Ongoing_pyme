@@ -3,6 +3,7 @@
 use App\Webminder\Panel\Models\SitioWeb;
 use App\Webminder\Panel\Services\AgenteComunicacionService;
 use App\Webminder\Panel\Services\AvisosService;
+use App\Webminder\Panel\Services\InjertoService;
 use App\Webminder\Panel\Services\RondaNocturna;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
@@ -21,7 +22,7 @@ Artisan::command('webminder:verificar', function (AgenteComunicacionService $age
  * Caídas, como Jetpack: la portada (sin caché) no responde o da 5xx dos veces
  * seguidas → un aviso; cuando vuelve, otro con el tiempo caída.
  */
-Artisan::command('webminder:vigilar', function (RondaNocturna $ronda) {
+Artisan::command('webminder:vigilar', function (RondaNocturna $ronda, InjertoService $injerto) {
     foreach (SitioWeb::where('activo', true)->get() as $sitio) {
         $url = $sitio->url . (str_contains($sitio->url, '?') ? '&' : '?') . 'watchwp=' . time();
         for ($intento = 1; ; $intento++) {
@@ -45,6 +46,10 @@ Artisan::command('webminder:vigilar', function (RondaNocturna $ronda) {
             AvisosService::enviar("🟢 {$sitio->nombre} vuelve a funcionar", "{$sitio->url} responde de nuevo. Ha estado caída unos {$minutos} min (desde las " . AvisosService::hora($sitio->caida_desde) . ").");
             $sitio->update(['caida_desde' => null]);
         }
+        // Webs con Injerto: dominios de los scripts de la portada (no páginas de error ni retos de Cloudflare)
+        if (!$fallo && $sitio->tiene_injerto && $r->status() === 200) {
+            $injerto->revisarScripts($sitio, $r->body());
+        }
         $this->line(($fallo ? 'CAÍDA ' : 'ok    ') . $sitio->nombre . ($fallo ? " — {$fallo}" : ''));
     }
     $ronda->rescatar();
@@ -60,6 +65,14 @@ Artisan::command('webminder:probar-correo', function () {
     \Illuminate\Support\Facades\Mail::raw('Si lees esto, los avisos de watchWP llegan bien.', fn ($m) => $m->to(config('services.avisos.email'))->subject('watchWP · Correo de prueba'));
     $this->info('Enviado a ' . config('services.avisos.email'));
 })->purpose('Manda un correo de prueba (sin capturar errores, para ver qué falla)');
+
+Artisan::command('webminder:injerto-claves', function () {
+    $par = sodium_crypto_sign_keypair();
+    $this->line('Pública (constante INJERTO_CLAVE_PUBLICA del plugin Injerto):');
+    $this->info(base64_encode(sodium_crypto_sign_publickey($par)));
+    $this->line('Privada (WEBMINDER_INJERTO_CLAVE en el .env del panel; guárdala también fuera del servidor):');
+    $this->warn(base64_encode(sodium_crypto_sign_secretkey($par)));
+})->purpose('Genera el par de claves con que el panel firma el código de Injerto');
 
 Artisan::command('webminder:worker-zip', function () {
     $origen = base_path('webminder-worker');

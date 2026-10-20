@@ -7,6 +7,7 @@ use App\Webminder\Panel\Http\Controllers\SitiosController;
 use App\Webminder\Panel\Http\Controllers\OperacionesController;
 use App\Webminder\Panel\Http\Controllers\AuditoriaController;
 use App\Webminder\Panel\Http\Controllers\IngestaController;
+use App\Webminder\Panel\Http\Controllers\InjertoController;
 use App\Webminder\Panel\Http\Controllers\ActualizacionesController;
 
 // Autoactualización del worker: manifiesto y zip (artisan webminder:worker-zip). Públicos: no llevan secretos.
@@ -60,6 +61,13 @@ Route::prefix('webminder-panel')->name('webminder-panel.')->middleware(['web', '
     Route::get('/operaciones/{sitio}/reporte-salud', [OperacionesController::class, 'reporteSalud'])->name('operaciones.reporte-salud');
     Route::post('/operaciones/{sitio}/sso', [OperacionesController::class, 'sso'])->name('operaciones.sso');
     Route::post('/operaciones/{sitio}/revision-seguridad', [OperacionesController::class, 'revisionSeguridad'])->name('operaciones.revision-seguridad');
+
+    // Injerto: aprobación de código y scripts externos vigilados
+    Route::get('/injerto', [InjertoController::class, 'index'])->name('injerto.index');
+    Route::get('/injerto/{solicitud}', [InjertoController::class, 'show'])->name('injerto.show');
+    Route::post('/injerto/{solicitud}/aprobar', [InjertoController::class, 'aprobar'])->name('injerto.aprobar');
+    Route::post('/injerto/{solicitud}/rechazar', [InjertoController::class, 'rechazar'])->name('injerto.rechazar');
+    Route::post('/injerto/sitios/{sitio}/dominios', [InjertoController::class, 'dominio'])->name('injerto.dominio');
 
     // Auditoría
     Route::get('/auditoria', [AuditoriaController::class, 'index'])->name('auditoria.index');
