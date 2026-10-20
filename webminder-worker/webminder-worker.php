@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.2.0
+ * Version:     2.3.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.2.0';
+    const VERSION = '2.3.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -1935,6 +1935,9 @@ class WebminderAgent {
             $this->maybe_refresh_updates(true);
         }
 
+        if (is_array($params) && !empty($params['refresh'])) {
+            wp_version_check();
+        }
         $plugin_updates = get_site_transient('update_plugins');
         $theme_updates = get_site_transient('update_themes');
 
@@ -1943,6 +1946,17 @@ class WebminderAgent {
         $installed_plugins = function_exists('get_plugins') ? get_plugins() : [];
 
         $updates = [];
+
+        // Núcleo primero: un plugin nuevo puede necesitar la versión nueva de WordPress
+        if ($offer = $this->core_offer()) {
+            $updates[] = [
+                'type'            => 'core',
+                'item'            => 'core',
+                'name'            => 'WordPress',
+                'version'         => $offer->current,
+                'current_version' => get_bloginfo('version'),
+            ];
+        }
 
         if (isset($plugin_updates->response) && is_array($plugin_updates->response)) {
             foreach ($plugin_updates->response as $file => $plugin) {
@@ -2110,6 +2124,69 @@ class WebminderAgent {
                     'success'          => false,
                     'message'          => $message,
                     'requires_license' => $requires_license,
+                ]);
+            }
+
+            // Núcleo: Core_Upgrader, como las actualizaciones automáticas de WordPress. No hay
+            // vuelta atrás de archivos (WordPress entero y la BD ya migrada): si la web falla, se avisa.
+            if ($type === 'core') {
+                $offer = $this->core_offer();
+                if (!$offer) {
+                    ob_end_clean();
+                    return rest_ensure_response(['success' => true, 'message' => 'WordPress ya está en la última versión.']);
+                }
+                if (!$this->acquire_update_lock()) {
+                    ob_end_clean();
+                    return new \WP_Error('busy', 'Ya hay otra actualización en curso en este sitio. Reintenta en unos minutos.', ['status' => 409]);
+                }
+                $lock_held = true;
+                require_once ABSPATH . 'wp-admin/includes/file.php';
+                require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+
+                $check_urls = $this->check_urls(isset($params['check_urls']) ? $params['check_urls'] : []);
+                $this->job_progress('Comprobando la web antes de actualizar', true);
+                $baseline = $this->probe_site($check_urls);
+                $this->job_progress('Descargando e instalando WordPress ' . $offer->current, true);
+                WP_Filesystem();
+                $skin = new \Automatic_Upgrader_Skin();
+                $upgrader = new \Core_Upgrader($skin);
+                // En éxito devuelve la versión nueva (string); WP_Error/false/null en fallo
+                $result = $upgrader->upgrade($offer);
+
+                if (!is_string($result)) {
+                    $upgrader->maintenance_mode(false); // un fallo a medias puede dejar el .maintenance
+                    $message = is_wp_error($result) ? $result->get_error_message() : '';
+                    $skin_messages = $skin->get_upgrade_messages();
+                    if ($message === '' && $skin_messages) {
+                        $message = html_entity_decode(wp_strip_all_tags(end($skin_messages)), ENT_QUOTES, 'UTF-8');
+                    }
+                    $message = 'No se pudo actualizar WordPress: ' . ($message !== '' ? $message : 'el actualizador no confirmó el éxito.');
+                    $this->record_update_failure('core', false, $message);
+                    ob_end_clean();
+                    return rest_ensure_response(['success' => false, 'message' => $message]);
+                }
+
+                // Sin reconstruir el transient aquí: wp_version_check aún vería la versión vieja cargada
+                delete_site_transient('update_core');
+                $this->clear_update_failure('core');
+                $this->job_progress('Comprobando la web después de actualizar', true);
+                $regressions = $this->probe_regressions($baseline, $this->probe_site($check_urls));
+                $this->purge_all_caches();
+                ob_end_clean();
+
+                if (!empty($regressions)) {
+                    return rest_ensure_response([
+                        'success'     => false,
+                        'rolled_back' => false,
+                        'regressions' => $regressions,
+                        'message'     => 'La web falla tras actualizar WordPress a ' . $result . ' (' . implode('; ', $regressions) . '). El núcleo no se revierte solo: revísala ya.',
+                    ]);
+                }
+                return rest_ensure_response([
+                    'success'  => true,
+                    'message'  => 'WordPress actualizado a ' . $result . '.',
+                    'verified' => count(array_filter($baseline, function ($p) { return $p['ok']; })) > 0,
+                    'item'     => 'core',
                 ]);
             }
 
@@ -2403,6 +2480,19 @@ class WebminderAgent {
         $active = array_values(array_unique($active));
         sort($active);
         update_option('active_plugins', $active);
+    }
+
+    /** Oferta de actualización del núcleo pendiente (la del idioma del sitio va primero), o null. */
+    private function core_offer() {
+        if (!function_exists('get_core_updates')) {
+            require_once ABSPATH . 'wp-admin/includes/update.php';
+        }
+        foreach ((array) get_core_updates() as $offer) {
+            if (is_object($offer) && isset($offer->response) && $offer->response === 'upgrade') {
+                return $offer;
+            }
+        }
+        return null;
     }
 
     /** ¿El paquete de idioma es para la versión instalada de su plugin/tema? */

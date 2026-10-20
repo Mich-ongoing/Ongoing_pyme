@@ -82,13 +82,18 @@ class AgenteComunicacionService
      * responde al momento y sigue en segundo plano; aquí se consulta /job hasta
      * tener el resultado. Cloudflare corta a los 100 s cualquier petición (HTTP 524).
      * Un worker anterior ignora 'job' y contesta con el resultado directamente.
+     * $reanudar: el $job ya se lanzó (el proceso que lo seguía murió); solo se consulta.
      */
-    public function peticionLarga(SitioWeb $sitio, string $endpoint, array $payload, int $limite, ?callable $alProgresar = null): array
+    public function peticionLarga(SitioWeb $sitio, string $endpoint, array $payload, int $limite, ?callable $alProgresar = null, ?string $job = null, bool $reanudar = false): array
     {
-        $job = Str::random(32);
-        $inicio = $this->hacerPeticion($sitio, $endpoint, $payload + ['job' => $job], null, 90);
-        if (($inicio['status'] ?? null) !== 'running' && ($inicio['success'] || !self::sinRespuesta($inicio))) {
-            return $inicio;
+        $job ??= Str::random(32);
+        if ($reanudar) {
+            $inicio = ['success' => false, 'error' => "Sin conexión: se retomó {$endpoint} tras un corte y el sitio no reconoce el trabajo. Revísalo antes de seguir."];
+        } else {
+            $inicio = $this->hacerPeticion($sitio, $endpoint, $payload + ['job' => $job], null, 90);
+            if (($inicio['status'] ?? null) !== 'running' && ($inicio['success'] || !self::sinRespuesta($inicio))) {
+                return $inicio;
+            }
         }
 
         // Si el arranque dio 524/timeout la operación puede estar en marcha igual: preguntar
@@ -234,11 +239,11 @@ class AgenteComunicacionService
     }
 
     /**
-     * Actualiza un ítem. $tipo: plugin|theme|translation; $item: "carpeta/archivo.php" o slug del tema.
+     * Actualiza un ítem. $tipo: core|plugin|theme|translation; $item: "carpeta/archivo.php" o slug del tema.
      */
-    public function ejecutarActualizacion(SitioWeb $sitio, string $tipo, string $item, array $extra = [], ?callable $alProgresar = null): array
+    public function ejecutarActualizacion(SitioWeb $sitio, string $tipo, string $item, array $extra = [], ?callable $alProgresar = null, ?string $job = null, bool $reanudar = false): array
     {
-        return $this->peticionLarga($sitio, 'update', ['type' => $tipo, 'item' => $item] + $extra, 900, $alProgresar);
+        return $this->peticionLarga($sitio, 'update', ['type' => $tipo, 'item' => $item] + $extra, 900, $alProgresar, $job, $reanudar);
     }
 
     public function obtenerPaquetes(SitioWeb $sitio): array

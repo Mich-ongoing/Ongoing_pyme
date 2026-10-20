@@ -40,7 +40,8 @@ return [
             'connection' => env('DB_QUEUE_CONNECTION'),
             'table' => env('DB_QUEUE_TABLE', 'jobs'),
             'queue' => env('DB_QUEUE', 'default'),
-            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 90),
+            // > timeout del paso más largo (ActualizarSitio, 2400 s): si no, la cola lo lanzaría dos veces
+            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 2500),
             'after_commit' => false,
         ],
 

@@ -58,12 +58,30 @@ Paid (5 $/mes) no hay límite diario.
 
 - `webminder:vigilar` cada 5 min: pide la portada sin caché; si no responde o da 5xx dos veces
   seguidas (30 s entre medias) manda «🔴 está caída»; cuando vuelve, «🟢 vuelve a funcionar» con el
-  tiempo caída. Un 4xx no cuenta como caída.
-- `webminder:nocturna` a las 23:00 (Madrid): en cada sitio vinculado, copia de BD y actualiza plugins
-  y temas (no traducciones ni núcleo) en serie, con el rollback y la comparación visual de siempre.
-  Al acabar el último sitio manda un informe con cada ítem y el enlace al lote.
-- En el `.env`: `WEBMINDER_AVISOS_EMAIL` (destinatario) y `MAIL_*` con un SMTP real y
-  `MAIL_FROM_ADDRESS`; sin ellos no sale nada (queda en el log).
+  tiempo caída. Un 4xx no cuenta como caída. De paso rescata lotes atascados (ver abajo).
+- `webminder:nocturna` a las 23:00 (Madrid): lee qué hay pendiente en cada sitio (núcleo, plugins,
+  temas y traducciones, en ese orden) y crea un lote por sitio con la misma `ronda`. Los lotes van de
+  uno en uno; cuando acaba el último se manda el informe (una sola vez por ronda).
+- **Por pasos:** `ActualizarSitio` hace un paso por job (copia de BD o un ítem) y encola el siguiente
+  10 s después. El id del trabajo en el sitio se guarda en `job_remoto`: si el proceso del panel muere,
+  la cola repite el job (tras `retry_after`, 2500 s) y retoma ese trabajo en vez de lanzarlo otra vez.
+  Un lote en curso 90 min sin avanzar se da por cortado; cualquier lote interrumpido manda «⚠».
+- El núcleo no tiene vuelta atrás de archivos: si la web falla después, el lote se para y avisa (hay
+  copia de BD).
+- `.env` de producción:
+  ```
+  MAIL_MAILER=smtp
+  MAIL_SCHEME=smtps
+  MAIL_HOST=smtp.resend.com
+  MAIL_PORT=465
+  MAIL_USERNAME=resend
+  MAIL_PASSWORD=re_...            # API key de Resend con permiso "Sending access"
+  MAIL_FROM_ADDRESS=watch@ongoing.es   # dominio verificado en Resend
+  MAIL_FROM_NAME=watchWP
+  WEBMINDER_AVISOS_EMAIL=...
+  DB_QUEUE_RETRY_AFTER=2500       # o quitarla: si es menor que 2400 un paso se lanzaría dos veces
+  ```
+  Probar con `php artisan webminder:probar-correo` (Laravel Toolkit → Artisan).
 
 ## Pruebas
 

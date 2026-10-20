@@ -146,6 +146,21 @@ class WebminderPanelTest extends TestCase
         $this->assertSame(0, EventoActividad::count());
     }
 
+    /** Ejecuta en orden los pasos que se van encolando (con la cola falsa, como haría el worker de la cola). */
+    private function vaciarCola(): void
+    {
+        for ($k = 0; $job = Queue::pushed(ActualizarSitio::class)->values()->get($k); $k++) {
+            $job->handle(app(AgenteComunicacionService::class), app(CapturasService::class));
+        }
+    }
+
+    private function procesar(Ejecucion $e): void
+    {
+        Queue::fake();
+        ActualizarSitio::dispatch($e->id);
+        $this->vaciarCola();
+    }
+
     private function lote(array $items, bool $copia = true): Ejecucion
     {
         return Ejecucion::create(['sitio_id' => $this->sitio->id, 'copia_bd' => $copia, 'items' => array_map(
@@ -166,7 +181,7 @@ class WebminderPanelTest extends TestCase
         });
         $e = $this->lote(['a/a.php', 'b/b.php', 'c/c.php']);
 
-        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class), app(CapturasService::class));
+        $this->procesar($e);
 
         $e->refresh();
         $this->assertSame('con_errores', $e->estado);
@@ -179,7 +194,7 @@ class WebminderPanelTest extends TestCase
         Http::fake(['*' => Http::response(['code' => 'dump_error', 'message' => 'disco lleno'], 500)]);
         $e = $this->lote(['a/a.php']);
 
-        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class), app(CapturasService::class));
+        $this->procesar($e);
 
         $e->refresh();
         $this->assertSame('interrumpida', $e->estado);
@@ -199,7 +214,7 @@ class WebminderPanelTest extends TestCase
         });
         $e = $this->lote(['a/a.php', 'b/b.php'], false);
 
-        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class), app(CapturasService::class));
+        $this->procesar($e);
 
         $e->refresh();
         $this->assertSame('interrumpida', $e->estado);
@@ -222,7 +237,7 @@ class WebminderPanelTest extends TestCase
         });
         $e = $this->lote(['a/a.php']);
 
-        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class), app(CapturasService::class));
+        $this->procesar($e);
 
         $e->refresh();
         $this->assertSame('wp-content/x/db.sql.gz', $e->archivo_copia_bd);
@@ -239,7 +254,7 @@ class WebminderPanelTest extends TestCase
         });
         $e = $this->lote(['a/a.php']);
 
-        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class), app(CapturasService::class));
+        $this->procesar($e);
 
         $e->refresh();
         $this->assertSame('interrumpida', $e->estado);
@@ -314,7 +329,7 @@ class WebminderPanelTest extends TestCase
         });
         $e = $this->lote(['a/a.php'], false);
 
-        (new ActualizarSitio($e->id))->handle(app(AgenteComunicacionService::class), app(CapturasService::class));
+        $this->procesar($e);
 
         $e->refresh();
         $item = $e->items[0];
@@ -403,9 +418,10 @@ class WebminderPanelTest extends TestCase
         Http::fake(function (Request $req) {
             return match (true) {
                 str_ends_with($req->url(), '/updates') => Http::response(['success' => true, 'data' => [
+                    ['type' => 'translation', 'item' => 'translations', 'name' => 'Traducciones', 'version' => '3'],
+                    ['type' => 'core', 'item' => 'core', 'name' => 'WordPress', 'current_version' => '6.8', 'version' => '6.9'],
                     ['type' => 'plugin', 'item' => 'a/a.php', 'name' => 'Plugin A', 'current_version' => '1.0', 'version' => '1.1'],
                     ['type' => 'theme', 'item' => 'tema', 'name' => 'Tema', 'current_version' => '2.0', 'version' => '2.1'],
-                    ['type' => 'translation', 'item' => 'es_ES', 'name' => 'Español'],
                 ]]),
                 str_ends_with($req->url(), '/backup-db') => Http::response(['success' => true, 'file' => 'db.sql.gz']),
                 str_ends_with($req->url(), '/status') => Http::response(['success' => true, 'data' => []]),
@@ -414,15 +430,64 @@ class WebminderPanelTest extends TestCase
             };
         });
 
+        Queue::fake();
         $this->artisan('webminder:nocturna')->assertSuccessful();
+        $this->assertSame([], $this->correos()); // el informe sale al acabar, no al lanzar
+        $this->vaciarCola();
 
         $e = Ejecucion::sole();
-        $this->assertSame(['a/a.php', 'tema'], array_column($e->items, 'item'));
-        $this->assertSame(['ok', 'revertido'], array_column($e->items, 'estado'));
+        $this->assertSame(['core', 'a/a.php', 'tema', 'translations'], array_column($e->items, 'item'));
+        $this->assertSame(['ok', 'ok', 'revertido', 'ok'], array_column($e->items, 'estado'));
+        $this->assertSame('con_errores', $e->estado);
+        // Un paso por job: copia de BD + 4 ítems
+        Queue::assertPushed(ActualizarSitio::class, 5);
         $this->assertTrue($e->copia_bd);
         [$informe] = $this->correos();
         $this->assertStringStartsWith('watchWP · Informe de mantenimiento', $informe->getSubject());
         $this->assertStringContainsString('Plugin A 1.0 → 1.1: actualizado', $informe->getTextBody());
         $this->assertStringContainsString('Tema 2.0 → 2.1: ✖ falló y se revirtió (HTTP 500)', $informe->getTextBody());
+        $this->assertStringContainsString('WordPress 6.8 → 6.9: actualizado', $informe->getTextBody());
+        $this->assertStringContainsString('Traducciones (3 paquetes): actualizado', $informe->getTextBody());
+    }
+
+    public function test_si_el_proceso_muere_a_mitad_se_retoma_el_trabajo_del_sitio(): void
+    {
+        Http::fake(function (Request $req) {
+            return match (true) {
+                str_ends_with($req->url(), '/job') && $req['job'] === 'trabajoqueseguiaenelsitio123' => Http::response(['success' => true, 'status' => 'done', 'result' => ['success' => true, 'verified' => true]]),
+                str_ends_with($req->url(), '/status') => Http::response(['success' => true, 'data' => []]),
+                default => Http::response(['success' => true, 'verified' => true]),
+            };
+        });
+        $e = $this->lote(['a/a.php', 'b/b.php'], false);
+        $e->update(['estado' => 'en_curso', 'job_remoto' => 'trabajoqueseguiaenelsitio123']);
+        $e->marcarItem(0, 'en_curso');
+
+        $this->procesar($e);
+
+        $e->refresh();
+        $this->assertSame('completada', $e->estado);
+        $this->assertSame(['ok', 'ok'], array_column($e->items, 'estado'));
+        $this->assertNull($e->job_remoto);
+        // a/a.php no se vuelve a lanzar: solo se recoge su resultado
+        $this->assertCount(1, Http::recorded(fn (Request $req) => str_ends_with($req->url(), '/update')));
+    }
+
+    public function test_un_lote_atascado_se_da_por_cortado_avisa_y_cierra_la_ronda(): void
+    {
+        config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
+        Http::fake(['*' => Http::response('ok', 200)]);
+        $e = $this->lote(['a/a.php', 'b/b.php'], false);
+        $e->update(['ronda' => '2026-10-20 23:00', 'estado' => 'en_curso', 'progreso' => 'Actualizando a/a.php…']);
+        $e->marcarItem(0, 'en_curso');
+        \DB::table('panel_ejecuciones')->update(['updated_at' => now()->subHours(2)]);
+
+        $this->artisan('webminder:vigilar');
+
+        $e->refresh();
+        $this->assertSame('interrumpida', $e->estado);
+        $this->assertSame(['error', 'pendiente'], array_column($e->items, 'estado'));
+        $asuntos = array_map(fn ($c) => $c->getSubject(), $this->correos());
+        $this->assertSame(['watchWP · ⚠ Actualización interrumpida en ACME', 'watchWP · Informe de mantenimiento 2026-10-20'], $asuntos);
     }
 }

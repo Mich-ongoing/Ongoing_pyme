@@ -50,18 +50,10 @@ class ActualizacionesController
         }
         $pendientes = collect($resultado['data'] ?? [])->keyBy(fn ($u) => $u['type'] . '|' . $u['item']);
 
-        $items = [];
-        foreach ($validado['items'] as $clave) {
-            if ($u = $pendientes->get($clave)) {
-                $items[] = Ejecucion::item($u);
-            }
-        }
+        $items = Ejecucion::items($pendientes->only($validado['items'])->all());
         if (!$items) {
             return back()->with('error', 'Ninguno de los elementos elegidos sigue pendiente en el sitio.');
         }
-
-        // Traducciones al final: si algo se revierte, que no hayan cambiado ya los idiomas
-        usort($items, fn ($a, $b) => ($a['tipo'] === 'translation') <=> ($b['tipo'] === 'translation'));
 
         $ejecucion = Ejecucion::create([
             'sitio_id' => $sitio->id,

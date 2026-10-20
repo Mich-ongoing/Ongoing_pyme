@@ -41,7 +41,7 @@
                                         </td>
                                         <td class="py-3 px-4 font-medium text-slate-100"><label for="{{ $id }}">{{ $u['name'] }}</label>
                                             <p class="text-xs text-slate-500 font-normal">{{ $u['item'] }}</p></td>
-                                        <td class="py-3 px-4 text-xs text-slate-400">{{ ['plugin' => 'Plugin', 'theme' => 'Tema', 'translation' => 'Traducciones'][$u['type']] ?? $u['type'] }}</td>
+                                        <td class="py-3 px-4 text-xs text-slate-400">{{ ['core' => 'WordPress', 'plugin' => 'Plugin', 'theme' => 'Tema', 'translation' => 'Traducciones'][$u['type']] ?? $u['type'] }}</td>
                                         <td class="py-3 px-4 text-xs">
                                             @if($u['type'] === 'translation')
                                                 {{ $u['version'] }} paquetes
