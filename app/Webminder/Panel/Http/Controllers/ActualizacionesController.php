@@ -53,11 +53,7 @@ class ActualizacionesController
         $items = [];
         foreach ($validado['items'] as $clave) {
             if ($u = $pendientes->get($clave)) {
-                $items[] = [
-                    'tipo' => $u['type'], 'item' => $u['item'], 'nombre' => $u['name'] ?? $u['item'],
-                    'desde' => $u['current_version'] ?? null, 'hasta' => $u['version'] ?? null,
-                    'estado' => 'pendiente', 'mensaje' => null,
-                ];
+                $items[] = Ejecucion::item($u);
             }
         }
         if (!$items) {

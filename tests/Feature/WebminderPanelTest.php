@@ -363,4 +363,66 @@ class WebminderPanelTest extends TestCase
         }
         $this->post('/login', ['email' => 'nadie@test.test', 'password' => 'mal'])->assertStatus(429);
     }
+
+    /** @return \Symfony\Component\Mime\Email[] */
+    private function correos(): array
+    {
+        return app('mailer')->getSymfonyTransport()->messages()->map(fn ($m) => $m->getOriginalMessage())->all();
+    }
+
+    public function test_vigilar_avisa_una_vez_de_la_caida_y_de_la_vuelta(): void
+    {
+        config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
+        Http::fake(['acme.test/*' => Http::sequence()->push('', 503)->push('', 503)->push('', 503)->push('', 503)->push('ok', 200)]);
+
+        $this->artisan('webminder:vigilar')->assertSuccessful();
+        $this->assertNotNull($this->sitio->refresh()->caida_desde);
+        $this->artisan('webminder:vigilar'); // sigue caída: sin segundo aviso
+        $this->artisan('webminder:vigilar');
+
+        $this->assertNull($this->sitio->refresh()->caida_desde);
+        $asuntos = array_map(fn ($c) => $c->getSubject(), $this->correos());
+        $this->assertSame(['watchWP · 🔴 ACME está caída', 'watchWP · 🟢 ACME vuelve a funcionar'], $asuntos);
+        Http::assertSent(fn (Request $req) => str_contains($req->url(), 'watchwp='));
+    }
+
+    public function test_un_fallo_suelto_no_cuenta_como_caida(): void
+    {
+        config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
+        Http::fake(['acme.test/*' => Http::sequence()->push('', 502)->push('ok', 200)]);
+
+        $this->artisan('webminder:vigilar');
+
+        $this->assertNull($this->sitio->refresh()->caida_desde);
+        $this->assertSame([], $this->correos());
+    }
+
+    public function test_la_nocturna_actualiza_plugins_y_temas_y_manda_el_informe(): void
+    {
+        config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
+        Http::fake(function (Request $req) {
+            return match (true) {
+                str_ends_with($req->url(), '/updates') => Http::response(['success' => true, 'data' => [
+                    ['type' => 'plugin', 'item' => 'a/a.php', 'name' => 'Plugin A', 'current_version' => '1.0', 'version' => '1.1'],
+                    ['type' => 'theme', 'item' => 'tema', 'name' => 'Tema', 'current_version' => '2.0', 'version' => '2.1'],
+                    ['type' => 'translation', 'item' => 'es_ES', 'name' => 'Español'],
+                ]]),
+                str_ends_with($req->url(), '/backup-db') => Http::response(['success' => true, 'file' => 'db.sql.gz']),
+                str_ends_with($req->url(), '/status') => Http::response(['success' => true, 'data' => []]),
+                ($req->data()['item'] ?? null) === 'tema' => Http::response(['success' => false, 'rolled_back' => true, 'message' => 'HTTP 500']),
+                default => Http::response(['success' => true, 'verified' => true]),
+            };
+        });
+
+        $this->artisan('webminder:nocturna')->assertSuccessful();
+
+        $e = Ejecucion::sole();
+        $this->assertSame(['a/a.php', 'tema'], array_column($e->items, 'item'));
+        $this->assertSame(['ok', 'revertido'], array_column($e->items, 'estado'));
+        $this->assertTrue($e->copia_bd);
+        [$informe] = $this->correos();
+        $this->assertStringStartsWith('watchWP · Informe de mantenimiento', $informe->getSubject());
+        $this->assertStringContainsString('Plugin A 1.0 → 1.1: actualizado', $informe->getTextBody());
+        $this->assertStringContainsString('Tema 2.0 → 2.1: ✖ falló y se revirtió (HTTP 500)', $informe->getTextBody());
+    }
 }

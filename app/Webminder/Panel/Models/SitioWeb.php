@@ -26,12 +26,14 @@ class SitioWeb extends Model
         'estado',
         'ultima_verificacion',
         'proxima_verificacion',
+        'caida_desde',
     ];
 
     protected $casts = [
         'activo' => 'boolean',
         'ultima_verificacion' => 'datetime',
         'proxima_verificacion' => 'datetime',
+        'caida_desde' => 'datetime',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];

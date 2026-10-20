@@ -29,6 +29,16 @@ class Ejecucion extends Model
         return $this->belongsTo(User::class, 'usuario_id');
     }
 
+    /** Ítem de un lote a partir de una entrada de /updates del worker. */
+    public static function item(array $u): array
+    {
+        return [
+            'tipo' => $u['type'], 'item' => $u['item'], 'nombre' => $u['name'] ?? $u['item'],
+            'desde' => $u['current_version'] ?? null, 'hasta' => $u['version'] ?? null,
+            'estado' => 'pendiente', 'mensaje' => null,
+        ];
+    }
+
     public function terminada(): bool
     {
         return in_array($this->estado, ['completada', 'con_errores', 'interrumpida'], true);

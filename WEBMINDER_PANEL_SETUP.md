@@ -54,6 +54,17 @@ Plan gratuito: 1 captura cada 10 s y 10 min de navegador al día (~6 capturas po
 unos 15-20 elementos al día); el panel espera solo cuando Cloudflare responde 429. Con Workers
 Paid (5 $/mes) no hay límite diario.
 
+## Avisos de caída y mantenimiento nocturno (watchWP)
+
+- `webminder:vigilar` cada 5 min: pide la portada sin caché; si no responde o da 5xx dos veces
+  seguidas (30 s entre medias) manda «🔴 está caída»; cuando vuelve, «🟢 vuelve a funcionar» con el
+  tiempo caída. Un 4xx no cuenta como caída.
+- `webminder:nocturna` a las 23:00 (Madrid): en cada sitio vinculado, copia de BD y actualiza plugins
+  y temas (no traducciones ni núcleo) en serie, con el rollback y la comparación visual de siempre.
+  Al acabar el último sitio manda un informe con cada ítem y el enlace al lote.
+- En el `.env`: `WEBMINDER_AVISOS_EMAIL` (destinatario) y `MAIL_*` con un SMTP real y
+  `MAIL_FROM_ADDRESS`; sin ellos no sale nada (queda en el log).
+
 ## Pruebas
 
 - Panel: `ddev artisan test`.

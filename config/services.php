@@ -34,6 +34,11 @@ return [
         'token' => env('WEBMINDER_CF_TOKEN'),
     ],
 
+    // watchWP: a quién llegan los avisos de caída y el informe nocturno
+    'avisos' => [
+        'email' => env('WEBMINDER_AVISOS_EMAIL'),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),
