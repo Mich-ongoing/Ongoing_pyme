@@ -417,7 +417,7 @@ class WebminderPanelTest extends TestCase
         config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
         Http::fake(function (Request $req) {
             return match (true) {
-                str_ends_with($req->url(), '/updates') => Http::response(['success' => true, 'data' => [
+                str_ends_with($req->url(), '/updates') => Http::response(['success' => true, 'backups_size' => 1572864, 'data' => [
                     ['type' => 'translation', 'item' => 'translations', 'name' => 'Traducciones', 'version' => '3'],
                     ['type' => 'core', 'item' => 'core', 'name' => 'WordPress', 'current_version' => '6.8', 'version' => '6.9'],
                     ['type' => 'plugin', 'item' => 'a/a.php', 'name' => 'Plugin A', 'current_version' => '1.0', 'version' => '1.1'],
@@ -448,6 +448,7 @@ class WebminderPanelTest extends TestCase
         $this->assertStringContainsString('Tema 2.0 → 2.1: ✖ falló y se revirtió (HTTP 500)', $informe->getTextBody());
         $this->assertStringContainsString('WordPress 6.8 → 6.9: actualizado', $informe->getTextBody());
         $this->assertStringContainsString('Traducciones (3 paquetes): actualizado', $informe->getTextBody());
+        $this->assertStringContainsString('ACME: con errores (copias en el sitio: 1.5 MB)', $informe->getTextBody());
     }
 
     public function test_si_el_proceso_muere_a_mitad_se_retoma_el_trabajo_del_sitio(): void

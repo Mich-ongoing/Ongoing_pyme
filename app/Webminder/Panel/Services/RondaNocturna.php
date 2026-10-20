@@ -28,6 +28,7 @@ class RondaNocturna
     public function planificar(): string
     {
         $ronda = now()->timezone('Europe/Madrid')->format('Y-m-d H:i');
+        $copias = [];
         foreach ($this->sitios() as $sitio) {
             $r = $this->agente->obtenerActualizaciones($sitio, true);
             if (!$r['success']) {
@@ -36,10 +37,13 @@ class RondaNocturna
                     'error' => 'No se pudo leer qué hay pendiente: ' . $r['error'], 'terminada_en' => now()]);
                 continue;
             }
+            $copias[$sitio->id] = $r['backups_size'] ?? null;
             if ($items = Ejecucion::items($r['data'] ?? [])) {
                 Ejecucion::create(['sitio_id' => $sitio->id, 'ronda' => $ronda, 'copia_bd' => true, 'items' => $items]);
             }
         }
+        // Para el informe, que sale horas después
+        Cache::put("watchwp-copias-{$ronda}", $copias, now()->addDays(3));
         $this->continuar($ronda);
 
         return $ronda;
@@ -86,13 +90,16 @@ class RondaNocturna
         $lineas = SitioWeb::where('activo', true)->whereNotNull('caida_desde')->get()
             ->map(fn ($s) => "🔴 {$s->nombre} sigue caída desde las " . AvisosService::hora($s->caida_desde))->all();
 
+        $copias = Cache::get("watchwp-copias-{$ronda}", []);
+
         foreach ($this->sitios() as $sitio) {
             $e = $lotes->get($sitio->id);
+            $ocupan = isset($copias[$sitio->id]) ? ' (copias en el sitio: ' . round($copias[$sitio->id] / 1048576, 1) . ' MB)' : '';
             if (!$e) {
-                $lineas[] = "✔ {$sitio->nombre}: todo al día";
+                $lineas[] = "✔ {$sitio->nombre}: todo al día{$ocupan}";
                 continue;
             }
-            $bloque = ($e->estado === 'completada' ? '✔' : '✖') . " {$sitio->nombre}: " . str_replace('_', ' ', $e->estado) . ($e->error ? " — {$e->error}" : '');
+            $bloque = ($e->estado === 'completada' ? '✔' : '✖') . " {$sitio->nombre}: " . str_replace('_', ' ', $e->estado) . $ocupan . ($e->error ? " — {$e->error}" : '');
             foreach ($e->items as $item) {
                 $version = $item['tipo'] === 'translation' ? "({$item['hasta']} paquetes)" : "{$item['desde']} → {$item['hasta']}";
                 $bloque .= "\n    · {$item['nombre']} {$version}: " . (self::ESTADOS[$item['estado']] ?? $item['estado'])

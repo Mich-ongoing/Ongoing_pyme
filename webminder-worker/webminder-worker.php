@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.3.0
+ * Version:     2.3.1
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.3.0';
+    const VERSION = '2.3.1';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -1935,8 +1935,13 @@ class WebminderAgent {
             $this->maybe_refresh_updates(true);
         }
 
+        // El refresco lo pide la ronda nocturna en todos los sitios: buen momento para purgar
+        // las copias caducadas aunque esa noche no haya nada que actualizar
+        $backups_size = null;
         if (is_array($params) && !empty($params['refresh'])) {
             wp_version_check();
+            $this->prune_old_backups(self::backup_dir());
+            $backups_size = self::dir_size(self::backup_dir());
         }
         $plugin_updates = get_site_transient('update_plugins');
         $theme_updates = get_site_transient('update_themes');
@@ -2029,7 +2034,8 @@ class WebminderAgent {
 
         return rest_ensure_response([
             'success' => true,
-            'data' => $updates
+            'data' => $updates,
+            'backups_size' => $backups_size, // bytes de copias guardadas en el sitio (solo con refresh)
         ]);
     }
 
@@ -2846,6 +2852,19 @@ class WebminderAgent {
                 }
             }
         }
+    }
+
+    /** Bytes que ocupa un directorio (0 si no se puede leer). */
+    private static function dir_size($dir) {
+        $total = 0;
+        try {
+            foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS)) as $f) {
+                $total += $f->getSize();
+            }
+        } catch (\Throwable $e) {
+            // Permisos raros en el hosting: mejor un tamaño parcial que romper la lista de updates
+        }
+        return $total;
     }
 
     /**
