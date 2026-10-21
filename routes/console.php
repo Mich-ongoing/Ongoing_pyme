@@ -6,6 +6,7 @@ use App\Webminder\Panel\Services\AvisosService;
 use App\Webminder\Panel\Services\InjertoService;
 use App\Webminder\Panel\Services\RondaNocturna;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schedule;
@@ -45,6 +46,20 @@ Artisan::command('webminder:vigilar', function (RondaNocturna $ronda, InjertoSer
             $minutos = (int) $sitio->caida_desde->diffInMinutes(now());
             AvisosService::enviar("🟢 {$sitio->nombre} vuelve a funcionar", "{$sitio->url} responde de nuevo. Ha estado caída unos {$minutos} min (desde las " . AvisosService::hora($sitio->caida_desde) . ").");
             $sitio->update(['caida_desde' => null]);
+        }
+        // Responde 200 pero no es la web: en ccmir-mir.com y delvy.es 1 de cada 3 visitas acababa en el login de
+        // Plesk (Cloudflare entraba por una IPv6 del servidor sin la web) y nada avisaba. Un correo al día como mucho.
+        $final = $fallo ? '' : (string) $r->effectiveUri();
+        $propio = fn ($u) => preg_replace('/^www\./', '', strtolower((string) parse_url((string) $u, PHP_URL_HOST)));
+        if (!$fallo && $r->status() === 200 && $sitio->estado !== 'mantenimiento'
+            && (!preg_match('#/wp-(content|includes)/#', $r->body()) || ($final !== '' && $propio($final) !== $propio($sitio->url)))
+            && Cache::add("watchwp-no-es-la-web-{$sitio->id}", true, now()->addDay())) {
+            preg_match('#<title[^>]*>(.*?)</title>#is', $r->body(), $titulo);
+            AvisosService::enviar("⚠ {$sitio->nombre} no siempre sirve la web",
+                "Al pedir {$sitio->url} llegó otra cosa en vez de la web de WordPress:\n\n  URL final: " . ($final ?: $url)
+                . "\n  Título: " . trim(html_entity_decode(strip_tags($titulo[1] ?? '(sin título)'))) . "\n\n"
+                . "Si es una página de Plesk (login o 404), lo habitual es que en el DNS de Cloudflare haya un registro AAAA (IPv6) "
+                . "que apunta a una IP en la que la web no está configurada: bórralo o asígnale esa IPv6 en Plesk. Afecta también a los visitantes.");
         }
         // Webs con Injerto: dominios de los scripts de la portada (no páginas de error ni retos de Cloudflare)
         if (!$fallo && $sitio->tiene_injerto && $r->status() === 200) {

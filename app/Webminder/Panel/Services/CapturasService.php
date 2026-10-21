@@ -118,22 +118,32 @@ class CapturasService
     }
 
     /**
-     * Guarda las capturas de un ítem y su comparación.
+     * Guarda las capturas de un ítem y su comparación. Con varias capturas de después
+     * (se repite cuando la primera sale distinta) cuenta la más parecida a antes: un fallo
+     * pasajero, como una hoja de estilos que no llegó, no es una web rota.
      * @param array<string,?string> $antes
      * @param array<string,?string> $antes2
-     * @param array<string,?string> $despues
+     * @param array<string,?string> ...$despues
      * @return array<string,?float> vista => % cambiado (null si faltó alguna captura)
      */
-    public function compararYGuardar(int $ejecucionId, int $i, array $antes, array $antes2, array $despues): array
+    public function compararYGuardar(int $ejecucionId, int $i, array $antes, array $antes2, array ...$despues): array
     {
         $resultado = [];
         foreach (array_keys(self::VISTAS) as $vista) {
-            if (!$antes[$vista] || !$antes2[$vista] || !$despues[$vista]) {
+            $candidatas = array_filter(array_column($despues, $vista));
+            if (!$antes[$vista] || !$antes2[$vista] || !$candidatas) {
                 $resultado[$vista] = null;
                 continue;
             }
-            [$porcentaje, $diff] = $this->comparar($antes[$vista], $antes2[$vista], $despues[$vista]);
-            foreach (['antes' => $antes[$vista], 'despues' => $despues[$vista], 'diff' => $diff] as $tipo => $jpg) {
+            $mejor = null;
+            foreach ($candidatas as $jpg) {
+                [$porcentaje, $diff] = $this->comparar($antes[$vista], $antes2[$vista], $jpg);
+                if (!$mejor || $porcentaje < $mejor[0]) {
+                    $mejor = [$porcentaje, $diff, $jpg];
+                }
+            }
+            [$porcentaje, $diff, $elegida] = $mejor;
+            foreach (['antes' => $antes[$vista], 'despues' => $elegida, 'diff' => $diff] as $tipo => $jpg) {
                 Storage::disk('local')->put(self::ruta($ejecucionId, "{$i}-{$vista}-{$tipo}.jpg"), $jpg);
             }
             $resultado[$vista] = $porcentaje;

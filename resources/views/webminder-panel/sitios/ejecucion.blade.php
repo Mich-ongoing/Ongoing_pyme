@@ -38,9 +38,11 @@
             @if($ejecucion->error)
                 <p class="text-sm text-rose-400 mt-2">{{ $ejecucion->error }}</p>
             @endif
-            @if(collect($ejecucion->items)->contains('estado', 'cambio_visual'))
-                <p class="text-sm text-amber-300 mt-2">Algún elemento cambió el aspecto de la web: revisa sus capturas abajo.</p>
-            @endif
+            @foreach($ejecucion->items as $item)
+                @if($item['estado'] === 'cambio_visual')
+                    <p class="text-sm text-amber-300 mt-2">La web se ve distinta tras actualizar <a href="#item-{{ $loop->index }}" class="underline font-semibold">{{ $item['nombre'] }}</a>: compara las capturas de ese elemento y revierte si algo se ha roto.</p>
+                @endif
+            @endforeach
             @if($ejecucion->archivo_copia_bd)
                 <p class="text-xs text-slate-400 mt-2">Copia de la BD en el sitio: <code>{{ $ejecucion->archivo_copia_bd }}</code> · restaurar por SSH con <code>wp db import</code></p>
             @endif
@@ -50,7 +52,7 @@
             <ul class="divide-y divide-slate-800/60">
                 @foreach($ejecucion->items as $item)
                     @php [$texto, $color] = $etiquetas[$item['estado']] ?? [$item['estado'], 'text-slate-400']; @endphp
-                    <li class="py-3 flex flex-wrap justify-between gap-2">
+                    <li id="item-{{ $loop->index }}" class="py-3 flex flex-wrap justify-between gap-2 scroll-mt-6">
                         <div>
                             <p class="text-sm font-medium text-slate-100">{{ $item['nombre'] }}</p>
                             <p class="text-xs text-slate-500">
@@ -67,9 +69,21 @@
                                         sin capturas
                                     @else
                                         <span class="{{ $porcentaje > \App\Webminder\Panel\Services\CapturasService::UMBRAL ? 'text-amber-300' : 'text-emerald-400' }}">{{ number_format($porcentaje, 1, ',', '.') }}% distinto</span>
-                                        · @foreach(['antes' => 'antes', 'despues' => 'después', 'diff' => 'cambios en rojo'] as $tipo => $etiqueta)
-                                            <a class="underline hover:text-slate-200" target="_blank" href="{{ route('webminder-panel.ejecuciones.captura', [$ejecucion, "{$loop->parent->parent->index}-{$vista}-{$tipo}.jpg"]) }}">{{ $etiqueta }}</a>{{ $loop->last ? '' : ' · ' }}
-                                        @endforeach
+                                        {{-- Abiertas si este elemento cambió la web; si no, a un clic --}}
+                                        <details class="mt-2" @if($item['estado'] === 'cambio_visual') open @endif>
+                                            <summary class="cursor-pointer text-slate-400 hover:text-slate-200">Ver capturas</summary>
+                                            <div class="grid grid-cols-3 gap-3 mt-2">
+                                                @foreach(['antes' => 'Antes', 'despues' => 'Después', 'diff' => 'Cambios en rojo'] as $tipo => $etiqueta)
+                                                    @php $src = route('webminder-panel.ejecuciones.captura', [$ejecucion, "{$loop->parent->parent->index}-{$vista}-{$tipo}.jpg"]); @endphp
+                                                    <figure>
+                                                        <figcaption class="mb-1 text-slate-400">{{ $etiqueta }}</figcaption>
+                                                        <a href="{{ $src }}" target="_blank" title="Abrir a tamaño completo" class="block h-96 overflow-y-auto rounded-lg border border-slate-700 bg-white">
+                                                            <img src="{{ $src }}" alt="{{ $etiqueta }} · {{ $vistas[$vista] ?? $vista }} · {{ $item['nombre'] }}" loading="lazy" class="w-full">
+                                                        </a>
+                                                    </figure>
+                                                @endforeach
+                                            </div>
+                                        </details>
                                     @endif
                                 </div>
                             @endforeach

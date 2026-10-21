@@ -38,27 +38,34 @@ class AgenteComunicacionService
 
         $secreto ??= $credencial->client_secret;
         $ruta = self::API . $endpoint;
-        // Nonce: dos peticiones iguales en el mismo segundo (doble clic) tendrían la misma
-        // firma y el worker rechazaría la segunda como replay. El worker ignora el campo.
-        $cuerpo = json_encode($payload + ['_nonce' => bin2hex(random_bytes(8))]);
-        $timestamp = time();
 
-        try {
-            // Sin retry(): son POST no idempotentes (un /update reintentado se
-            // aplicaría dos veces, o el worker lo rechazaría como replay).
-            $response = Http::withHeaders([
-                'X-Webminder-Signature-V2' => self::firmar('POST', $ruta, $timestamp, $cuerpo, $secreto),
-                // shortcut: firma v1 para los workers < 2.0 (pharmapiping, minestamp); quitar cuando todos estén en 2.x.
-                'X-Webminder-Signature' => hash_hmac('sha256', $cuerpo . $timestamp, $secreto),
-                'X-Webminder-Timestamp' => (string) $timestamp,
-            ])
-                ->withBody($cuerpo, 'application/json')
-                ->timeout($timeout)
-                ->post(rtrim($sitio->url, '/') . '/wp-json' . $ruta);
-        } catch (ConnectionException $e) {
-            $auditar && EventoAuditoria::registrarError('webminder_' . $endpoint, "Sin conexión con {$sitio->nombre}", $e->getMessage(), $sitio->id);
+        for ($intento = 1; ; $intento++) {
+            // Nonce: dos peticiones iguales en el mismo segundo (doble clic) tendrían la misma
+            // firma y el worker rechazaría la segunda como replay. El worker ignora el campo.
+            $cuerpo = json_encode($payload + ['_nonce' => bin2hex(random_bytes(8))]);
+            $timestamp = time();
+            try {
+                // Sin retry() genérico: son POST no idempotentes (un /update repetido se aplicaría dos veces)
+                $response = Http::withHeaders([
+                    'X-Webminder-Signature-V2' => self::firmar('POST', $ruta, $timestamp, $cuerpo, $secreto),
+                    // shortcut: firma v1 para los workers < 2.0 (pharmapiping, minestamp); quitar cuando todos estén en 2.x.
+                    'X-Webminder-Signature' => hash_hmac('sha256', $cuerpo . $timestamp, $secreto),
+                    'X-Webminder-Timestamp' => (string) $timestamp,
+                ])
+                    ->withBody($cuerpo, 'application/json')
+                    ->timeout($timeout)
+                    ->post(rtrim($sitio->url, '/') . '/wp-json' . $ruta);
+            } catch (ConnectionException $e) {
+                $auditar && EventoAuditoria::registrarError('webminder_' . $endpoint, "Sin conexión con {$sitio->nombre}", $e->getMessage(), $sitio->id);
 
-            return ['success' => false, 'error' => 'Sin conexión: ' . $e->getMessage()];
+                return ['success' => false, 'error' => 'Sin conexión: ' . $e->getMessage()];
+            }
+            // Una página HTML con 404/502/52x en la API es que la petición no llegó a WordPress (en ccmir-mir.com
+            // y delvy.es, 1 de cada 3 iba a una IPv6 del servidor sin la web): repetirla no aplica nada dos veces.
+            if ($intento >= 3 || $response->json() !== null || !in_array($response->status(), [404, 502, 520, 521, 522, 523], true)) {
+                break;
+            }
+            Sleep::for(3)->seconds();
         }
 
         $credencial->registrarUso();

@@ -8,6 +8,7 @@ use App\Webminder\Panel\Services\CapturasService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
+use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 
 /**
@@ -80,7 +81,7 @@ class ActualizarSitio implements ShouldQueue
             }
         }
 
-        $agente->obtenerStatus($sitio);
+        $this->comprobarVersiones($ejecucion, $agente->obtenerStatus($sitio)['data'] ?? null);
         $errores = collect($ejecucion->items)->whereIn('estado', ['revertido', 'licencia', 'error'])->count();
         $ejecucion->terminar($errores ? 'con_errores' : 'completada');
     }
@@ -110,8 +111,16 @@ class ActualizarSitio implements ShouldQueue
             $extra = ['backup' => $r['backup'] ?? null, 'ruta' => $r['item'] ?? $item['item']];
             if ($visual) {
                 $progreso("Comparando la web antes y después de {$item['nombre']}…");
-                $extra['visual'] = $capturas->compararYGuardar($ejecucion->id, $i, $antes, $antes2, $capturas->capturar($sitio->url));
+                $despues = $capturas->capturar($sitio->url);
+                $extra['visual'] = $capturas->compararYGuardar($ejecucion->id, $i, $antes, $antes2, $despues);
                 $medidos = array_filter($extra['visual'], 'is_float');
+                if ($medidos && max($medidos) > CapturasService::UMBRAL) {
+                    // Puede ser pasajero (cachés regenerándose, un CSS que no llegó): mirar otra vez antes de dar la alarma
+                    $progreso("La web se ve distinta tras {$item['nombre']}: comprobando otra vez en 30 s…");
+                    Sleep::for(30)->seconds();
+                    $extra['visual'] = $capturas->compararYGuardar($ejecucion->id, $i, $antes, $antes2, $despues, $capturas->capturar($sitio->url));
+                    $medidos = array_filter($extra['visual'], 'is_float');
+                }
                 if (!$medidos) {
                     $mensaje = trim($mensaje . ' No se pudo hacer la comparación visual (capturas fallidas).');
                 } elseif (max($medidos) > CapturasService::UMBRAL) {
@@ -139,6 +148,39 @@ class ActualizarSitio implements ShouldQueue
         }
 
         return true;
+    }
+
+    /**
+     * Lo que el sitio dio por actualizado tiene que verse instalado (en ccmir-mir.com un worker
+     * «actualizado» seguía en la versión vieja), y «ya tienes la última versión» solo es un éxito
+     * si de verdad está en esa versión. Sin estado del sitio no se puede comprobar y se deja.
+     */
+    private function comprobarVersiones(Ejecucion $ejecucion, ?array $datos): void
+    {
+        if (!$datos) {
+            return;
+        }
+        $instaladas = collect($datos['plugins_list'] ?? [])->pluck('version', 'file')->all();
+        $temas = collect($datos['themes'] ?? [])->pluck('version', 'slug')->all();
+        foreach ($ejecucion->items as $i => $it) {
+            $actual = match ($it['tipo']) {
+                'plugin' => $instaladas[$it['ruta'] ?? $it['item']] ?? null,
+                'theme' => $temas[$it['item']] ?? null,
+                'core' => $datos['wp_version'] ?? null,
+                default => null,
+            };
+            if ($actual === null || empty($it['hasta'])) {
+                continue;
+            }
+            $al_dia = version_compare($actual, $it['hasta'], '>=');
+            if (in_array($it['estado'], ['ok', 'ok_sin_verificar', 'cambio_visual'], true) && !$al_dia) {
+                $ejecucion->marcarItem($i, 'error', "El sitio dijo que se había actualizado, pero sigue en la {$actual}.");
+            } elseif ($it['estado'] === 'error' && preg_match('/última versión|latest version/i', (string) ($it['mensaje'] ?? ''))) {
+                $al_dia
+                    ? $ejecucion->marcarItem($i, 'ok', "Ya estaba en la {$actual}: el aviso de actualización era antiguo.")
+                    : $ejecucion->marcarItem($i, 'licencia', "WordPress no ofrece la descarga de la {$it['hasta']} y sigue en la {$actual}. En un plugin de pago suele ser la licencia caducada o sin activar en esta web.");
+            }
+        }
     }
 
     /** Lanza (o retoma, si el proceso anterior murió a mitad) una operación larga en el sitio. */

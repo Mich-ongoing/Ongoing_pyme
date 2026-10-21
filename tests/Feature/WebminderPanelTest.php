@@ -29,6 +29,9 @@ class WebminderPanelTest extends TestCase
 {
     use RefreshDatabase;
 
+    // Lo que vigilar espera de una portada: una página de WordPress (si no, avisa de que no es la web)
+    private const PORTADA_WP = '<html><head><link rel="stylesheet" href="https://acme.test/wp-content/themes/t/style.css"></head><body>ok</body></html>';
+
     private SitioWeb $sitio;
 
     private string $secreto = 'sk_secreto_de_prueba_0123456789abcdef0123456789abcdef';
@@ -360,6 +363,91 @@ class WebminderPanelTest extends TestCase
         Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/rollback') && $r->data()['backup'] === 'a-backup-123' && $r->data()['item'] === 'a/a.php');
     }
 
+    public function test_una_peticion_que_no_llega_a_wordpress_se_repite(): void
+    {
+        // Como ccmir-mir.com: 1 de cada 3 peticiones acababa en la 404 de Plesk (HTML), sin llegar a WordPress
+        Http::fake(['acme.test/*' => Http::sequence()->push('<html>Plesk 404</html>', 404)->push(['success' => true, 'data' => ['wp_version' => '6.9']])]);
+
+        $this->assertTrue($this->agente()->obtenerStatus($this->sitio)['success']);
+        Http::assertSentCount(2);
+    }
+
+    public function test_una_respuesta_de_wordpress_no_se_repite_aunque_sea_un_error(): void
+    {
+        Http::fake(['acme.test/*' => Http::response(['code' => 'rest_no_route', 'message' => 'No hay ruta'], 404)]);
+
+        $this->assertFalse($this->agente()->hacerPeticion($this->sitio, 'localizar')['success']);
+        Http::assertSentCount(1);
+    }
+
+    public function test_lo_que_el_sitio_da_por_actualizado_se_comprueba_con_la_version_instalada(): void
+    {
+        Http::fake(function (Request $req) {
+            return match (true) {
+                str_ends_with($req->url(), '/update') && $req->data()['item'] === 'a/a.php' => Http::response(['success' => true, 'verified' => true]),
+                str_ends_with($req->url(), '/update') => Http::response(['success' => false, 'message' => 'Tienes la última versión del plugin.']),
+                default => Http::response(['success' => true, 'data' => ['plugins_list' => [
+                    ['file' => 'a/a.php', 'version' => '1'], ['file' => 'b/b.php', 'version' => '2'], ['file' => 'c/c.php', 'version' => '1'],
+                ]]]),
+            };
+        });
+        $e = $this->lote(['a/a.php', 'b/b.php', 'c/c.php'], false);
+
+        $this->procesar($e);
+
+        $items = $e->refresh()->items;
+        // Dijo «actualizado» pero sigue en la 1 (lo de anoche en ccmir-mir.com)
+        $this->assertSame(['error', 'El sitio dijo que se había actualizado, pero sigue en la 1.'], [$items[0]['estado'], $items[0]['mensaje']]);
+        // «Ya tienes la última» y de verdad lo está: aviso viejo, no es un error
+        $this->assertSame('ok', $items[1]['estado']);
+        // «Ya tienes la última» y no lo está: plugin de pago sin licencia (GenerateBlocks Pro en fin2go)
+        $this->assertSame('licencia', $items[2]['estado']);
+        $this->assertSame('con_errores', $e->estado);
+    }
+
+    public function test_si_la_web_se_ve_distinta_se_mira_otra_vez_antes_de_avisar(): void
+    {
+        Storage::fake('local');
+        config(['services.capturas.cuenta' => 'cuenta', 'services.capturas.token' => 't']);
+        $capturas = 0;
+        Http::fake(function (Request $req) use (&$capturas) {
+            return match (true) {
+                // antes y antes2 bien; la primera de después rota (un CSS que no llegó); la repetición, bien
+                str_contains($req->url(), 'browser-run/screenshot') => Http::response(in_array(++$capturas, [5, 6], true) ? self::jpeg(bloque: [0, 100, 399, 700]) : self::jpeg()),
+                str_ends_with($req->url(), '/update') => Http::response(['success' => true, 'verified' => true, 'item' => 'a/a.php', 'backup' => 'b']),
+                default => Http::response(['success' => true, 'data' => []]),
+            };
+        });
+        $e = $this->lote(['a/a.php'], false);
+
+        $this->procesar($e);
+
+        $item = $e->refresh()->items[0];
+        $this->assertSame(8, $capturas);
+        $this->assertSame('ok', $item['estado']);
+        $this->assertLessThan(CapturasService::UMBRAL, $item['visual']['escritorio']);
+        Sleep::assertSlept(fn ($d) => $d->totalSeconds == 30);
+
+        // Las capturas se ven en la página, no solo como enlaces
+        $this->actingAs(User::factory()->create())->get(route('webminder-panel.ejecuciones.show', $e))->assertOk()
+            ->assertSee('Ver capturas')->assertSee('<img src="' . route('webminder-panel.ejecuciones.captura', [$e, '0-escritorio-despues.jpg']), false);
+    }
+
+    public function test_vigilar_avisa_una_vez_al_dia_si_la_portada_no_es_la_web(): void
+    {
+        config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
+        Http::fake(['acme.test/*' => Http::response('<html><head><title>Plesk Obsidian</title></head><body>Log in to Plesk</body></html>')]);
+
+        $this->artisan('webminder:vigilar');
+        $this->artisan('webminder:vigilar');
+
+        $correos = $this->correos();
+        $this->assertCount(1, $correos);
+        $this->assertStringContainsString('no siempre sirve la web', $correos[0]->getSubject());
+        $this->assertStringContainsString('Plesk Obsidian', $correos[0]->getTextBody());
+        $this->assertNull($this->sitio->refresh()->caida_desde); // no es una caída
+    }
+
     public function test_las_pantallas_del_panel_cargan(): void
     {
         Http::fake(['*' => Http::response(['success' => true, 'data' => [
@@ -393,7 +481,7 @@ class WebminderPanelTest extends TestCase
     public function test_vigilar_avisa_una_vez_de_la_caida_y_de_la_vuelta(): void
     {
         config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
-        Http::fake(['acme.test/*' => Http::sequence()->push('', 503)->push('', 503)->push('', 503)->push('', 503)->push('ok', 200)]);
+        Http::fake(['acme.test/*' => Http::sequence()->push('', 503)->push('', 503)->push('', 503)->push('', 503)->push(self::PORTADA_WP, 200)]);
 
         $this->artisan('webminder:vigilar')->assertSuccessful();
         $this->assertNotNull($this->sitio->refresh()->caida_desde);
@@ -409,7 +497,7 @@ class WebminderPanelTest extends TestCase
     public function test_un_fallo_suelto_no_cuenta_como_caida(): void
     {
         config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
-        Http::fake(['acme.test/*' => Http::sequence()->push('', 502)->push('ok', 200)]);
+        Http::fake(['acme.test/*' => Http::sequence()->push('', 502)->push(self::PORTADA_WP, 200)]);
 
         $this->artisan('webminder:vigilar');
 
@@ -482,7 +570,7 @@ class WebminderPanelTest extends TestCase
     public function test_un_lote_atascado_se_da_por_cortado_avisa_y_cierra_la_ronda(): void
     {
         config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
-        Http::fake(['*' => Http::response('ok', 200)]);
+        Http::fake(['*' => Http::response(self::PORTADA_WP, 200)]);
         $e = $this->lote(['a/a.php', 'b/b.php'], false);
         $e->update(['ronda' => '2026-10-20 23:00', 'estado' => 'en_curso', 'progreso' => 'Actualizando a/a.php…']);
         $e->marcarItem(0, 'en_curso');
