@@ -22,7 +22,7 @@ sigue siendo autónomo: el worker solo lee su estado y lanza su revisión.
 1. Panel → Sitios → nuevo sitio (genera credenciales) → Credenciales API → copiar el token.
 2. En el WordPress: instalar el worker, Herramientas → Ongoing Mantenimiento → pegar el token.
    El token lleva la URL del panel (de `APP_URL`), de ahí salen la ingesta y el manifiesto.
-3. SSO 1-clic: necesita una cuenta `fernando@ongoing.es` o `soporte@ongoing.es` con rol
+3. SSO 1-clic: necesita una cuenta `michell@ongoing.es` o `hello@ongoing.es` con rol
    administrador. Nunca entra con la del cliente. **Con Cerrojo**, esa cuenta debe estar en su
    lista blanca o la degrada a suscriptor: `wp cerrojo admin <usuario>`.
 

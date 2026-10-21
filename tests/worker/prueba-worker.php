@@ -117,13 +117,13 @@ wp_delete_post($pid, true);
 $ok($st === 400, 'un item fuera de la lista → 400');
 
 echo "SSO\n";
-$agencia = get_user_by('email', 'soporte@ongoing.es');
-$ok(!$agencia, '(no existe soporte@ongoing.es en este sitio)');
+$agencia = array_filter(WebminderAgent::SSO_PREFERRED_EMAILS, fn($e) => get_user_by('email', $e));
+$ok(!$agencia, '(no existe ninguna cuenta de agencia en este sitio)');
 [$st, $d] = $peticion('sso');
 $ok($st === 404 && ($d['code'] ?? '') === 'no_agency_account', 'sin cuenta de agencia → 404, no entra con el admin del cliente');
 $admins = function_exists('cerrojo_admins_confiados') ? cerrojo_admins_confiados() : [];
-$uid = wp_insert_user(['user_login' => 'wm_soporte', 'user_email' => 'soporte@ongoing.es', 'user_pass' => wp_generate_password(32), 'role' => 'subscriber']);
-update_option('cerrojo_admins', array_merge($admins, [$uid]), false); // = wp cerrojo admin wm_soporte; si no, Cerrojo lo degrada
+$uid = wp_insert_user(['user_login' => 'wm_hello', 'user_email' => 'hello@ongoing.es', 'user_pass' => wp_generate_password(32), 'role' => 'subscriber']);
+update_option('cerrojo_admins', array_merge($admins, [$uid]), false); // = wp cerrojo admin wm_hello; si no, Cerrojo lo degrada
 (new WP_User($uid))->set_role('administrator');
 sleep(1); // misma petición que la anterior en el mismo segundo = replay
 [$st, $d] = $peticion('sso');

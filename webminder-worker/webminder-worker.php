@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.7.0
+ * Version:     2.7.1
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.7.0';
+    const VERSION = '2.7.1';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -50,7 +50,7 @@ class WebminderAgent {
     // Emails preferidos para el SSO 1-Click: siempre se intenta entrar
     // con la cuenta de la agencia (evita contaminar el log de auditoría
     // con el usuario admin del cliente). Orden de preferencia.
-    const SSO_PREFERRED_EMAILS = ['fernando@ongoing.es', 'soporte@ongoing.es'];
+    const SSO_PREFERRED_EMAILS = ['michell@ongoing.es', 'hello@ongoing.es'];
     // ================= END BRAND BLOCK =================
 
     // Clave pública Ed25519 del panel (la misma que usa Injerto). El código de Cerrojo que
