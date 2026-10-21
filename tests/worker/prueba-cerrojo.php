@@ -83,6 +83,39 @@ $ok($st === 200 && ($d['cerrojo']['permiso_hasta'] ?? 0) === $hasta && cerrojo_p
 [$st, $d] = $peticion(['accion' => 'permiso', 'hasta' => 0]);
 $ok($st === 200 && ($d['cerrojo']['permiso_hasta'] ?? -9) === 0 && !cerrojo_puede_instalar(), 'cerrar no necesita firma');
 
+echo "Usuarios (wp cerrojo confiar / admin)\n";
+if (function_exists('cerrojo_usuarios')) {
+    require_once ABSPATH . 'wp-admin/includes/user.php';
+    foreach (['wm_bloqueado', 'wm_degradado'] as $l) {
+        ($v = get_user_by('login', $l)) && wp_delete_user($v->ID);
+    }
+    $admins_antes = get_option('cerrojo_admins');
+    cerrojo_admins_confiados(); // la lista de confianza ya existe en una web en uso (si no, se crearía incluyendo al nuevo)
+    $b = wp_insert_user(['user_login' => 'wm_bloqueado', 'user_pass' => wp_generate_password(), 'user_email' => 'wm_b@example.org', 'role' => 'editor']);
+    set_transient("cerrojo_f_$b", 9, DAY_IN_SECONDS);
+    $g = wp_insert_user(['user_login' => 'wm_degradado', 'user_pass' => wp_generate_password(), 'user_email' => 'wm_g@example.org', 'role' => 'subscriber']);
+    (new WP_User($g))->set_role('administrator'); // fuera de la lista: Cerrojo lo degrada
+    [$st, $d] = $peticion(['accion' => 'usuarios']);
+    $lista = array_column($d['usuarios'] ?? [], null, 'login');
+    $ok($st === 200 && !empty($lista['wm_bloqueado']['bloqueado']) && !empty($lista['wm_degradado']['degradado']), 'lista el bloqueado y el degradado');
+    [$st] = $peticion(['accion' => 'desbloquear', 'login' => 'wm_bloqueado']);
+    $ok($st === 200 && !get_transient("cerrojo_f_$b"), 'desbloquear quita el bloqueo');
+    $hasta = time() + 600;
+    [$st] = $peticion(['accion' => 'admin', 'login' => 'wm_degradado', 'hasta' => $hasta]);
+    $ok($st === 403 && !user_can($g, 'manage_options'), 'dar administrador sin firma del panel → 403');
+    [$st] = $peticion(['accion' => 'admin', 'login' => 'wm_degradado', 'hasta' => $hasta, 'firma' => base64_encode(sodium_crypto_sign_detached(cerrojo_mensaje_admin('wm_bloqueado', $hasta), $secreta))]);
+    $ok($st === 403, 'la firma de otro usuario no vale');
+    [$st] = $peticion(['accion' => 'admin', 'login' => 'wm_degradado', 'hasta' => $hasta, 'firma' => base64_encode(sodium_crypto_sign_detached(cerrojo_mensaje_admin('wm_degradado', $hasta), $secreta))]);
+    clean_user_cache($g);
+    $ok($st === 200 && user_can($g, 'manage_options'), 'con la firma del panel queda de administrador de confianza');
+    wp_delete_user($b);
+    wp_delete_user($g);
+    $admins_antes === false ? delete_option('cerrojo_admins') : update_option('cerrojo_admins', $admins_antes, false);
+    delete_option('cerrojo_degradados');
+} else {
+    echo "  (Cerrojo < 1.6: no se prueban los usuarios)\n";
+}
+
 echo "Limpiar y log\n";
 update_option('widget_prueba_cerrojo', [2 => ['text' => '<p>a</p><script>var u=String.fromCharCode(104,116,116,112,115,58,47,47,101,118,105,108,46,101,120,97,109,112,108,101);</script>']]);
 [$st, $d] = $peticion(['accion' => 'limpiar']);

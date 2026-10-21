@@ -102,6 +102,9 @@
                                             <button class="{{ $boton }} bg-indigo-600 hover:bg-indigo-500 text-white">{{ $instalado ? 'Actualizar' : 'Instalar' }} {{ $version }}</button>
                                         </form>
                                     @endif
+                                    @if($worker && version_compare($worker, '2.7.0', '>=') && $instalado)
+                                        <a href="{{ route('webminder-panel.cerrojo.usuarios', $sitio) }}" class="{{ $boton }} bg-slate-800 hover:bg-slate-700 text-slate-200">Usuarios</a>
+                                    @endif
                                     @if($worker_ok && isset($c['permiso_hasta']))
                                         <form method="POST" action="{{ route('webminder-panel.cerrojo.limpiar', $sitio) }}">
                                             @csrf

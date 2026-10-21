@@ -73,6 +73,31 @@ class CerrojoController
             ->with('hallazgos', array_merge($r['hechos'] ?? [], $r['findings'] ?? []));
     }
 
+    public function usuarios(SitioWeb $sitio): View
+    {
+        $r = $this->cerrojo->usuarios($sitio);
+
+        return view('webminder-panel::cerrojo.usuarios', [
+            'sitio' => $sitio,
+            'usuarios' => $r['success'] ? $r['usuarios'] : null,
+            'fallo' => $r['success'] ? null : ($r['error'] ?? 'error desconocido'),
+        ]);
+    }
+
+    public function desbloquear(Request $request, SitioWeb $sitio): RedirectResponse
+    {
+        $login = $request->validate(['login' => ['required', 'string', 'max:60']])['login'];
+
+        return $this->responder(fn () => $this->cerrojo->desbloquear($sitio, $login), "«{$login}» desbloqueado: ya puede entrar con su contraseña.");
+    }
+
+    public function autorizarAdmin(Request $request, SitioWeb $sitio): RedirectResponse
+    {
+        $login = $request->validate(['login' => ['required', 'string', 'max:60']])['login'];
+
+        return $this->responder(fn () => $this->cerrojo->autorizarAdmin($sitio, $login), "«{$login}» es administrador de confianza: Cerrojo ya no lo degrada.");
+    }
+
     private function responder(callable $accion, string $hecho): RedirectResponse
     {
         try {

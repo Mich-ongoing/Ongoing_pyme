@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.6.0
+ * Version:     2.7.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.6.0';
+    const VERSION = '2.7.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -899,7 +899,38 @@ class WebminderAgent {
             update_option('cerrojo_pendientes', count($quedan), false);
             return rest_ensure_response(['success' => true, 'hechos' => array_values($hechos), 'findings' => array_values($quedan), 'cerrojo' => $this->cerrojo_info()]);
         }
+        if (in_array($accion, ['usuarios', 'desbloquear', 'admin'], true)) {
+            return $this->cerrojo_usuarios($accion, $p);
+        }
         return new \WP_Error('accion', 'Acción de Cerrojo desconocida.', ['status' => 400]);
+    }
+
+    /**
+     * Usuarios de Cerrojo desde el panel (lo que hacían «wp cerrojo confiar» y «wp cerrojo admin»).
+     * Desbloquear solo quita el bloqueo por intentos; dar administrador exige firma del panel,
+     * porque el secreto de este sitio está en su BD y no debe bastar para crear un admin.
+     */
+    private function cerrojo_usuarios($accion, $p) {
+        if (!function_exists('cerrojo_usuarios')) {
+            return new \WP_Error('no_cerrojo', 'Este sitio no tiene Cerrojo 1.6 o posterior: actualízalo primero.', ['status' => 404]);
+        }
+        if ($accion !== 'usuarios') {
+            $login = (string) ($p['login'] ?? '');
+            $u = get_user_by('login', $login);
+            if (!$u) {
+                return new \WP_Error('usuario', 'No existe el usuario ' . $login . '.', ['status' => 404]);
+            }
+            if ($accion === 'desbloquear') {
+                cerrojo_desbloquear($u);
+            } else {
+                $hasta = (int) ($p['hasta'] ?? 0);
+                if ($hasta < time() || $hasta > time() + 900 || !cerrojo_firma_panel(cerrojo_mensaje_admin($login, $hasta), (string) ($p['firma'] ?? ''))) {
+                    return new \WP_Error('firma', 'Autorizar un administrador necesita la firma del panel (o ha caducado).', ['status' => 403]);
+                }
+                cerrojo_autorizar_admin($u);
+            }
+        }
+        return rest_ensure_response(['success' => true, 'usuarios' => cerrojo_usuarios()]);
     }
 
     /**

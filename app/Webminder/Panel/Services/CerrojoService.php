@@ -40,6 +40,36 @@ class CerrojoService
         return 'cerrojo|instalar|' . strtolower($host) . '|' . $hasta;
     }
 
+    /** Mismo formato que cerrojo_mensaje_admin() en el plugin. */
+    public static function mensajeAdmin(string $host, string $login, int $hasta): string
+    {
+        return 'cerrojo|admin|' . strtolower($host) . '|' . $login . '|' . $hasta;
+    }
+
+    /** Administradores, bloqueados por intentos y degradados por Cerrojo (necesita Cerrojo 1.6 y worker 2.7). */
+    public function usuarios(SitioWeb $sitio): array
+    {
+        return $this->agente->hacerPeticion($sitio, 'cerrojo', ['accion' => 'usuarios']);
+    }
+
+    /** Lo que hacía «wp cerrojo confiar»: quita el bloqueo por intentos fallidos. */
+    public function desbloquear(SitioWeb $sitio, string $login): array
+    {
+        return $this->agente->hacerPeticion($sitio, 'cerrojo', ['accion' => 'desbloquear', 'login' => $login]);
+    }
+
+    /** Lo que hacía «wp cerrojo admin»: firmado, porque crea un administrador. La firma vale 10 min. */
+    public function autorizarAdmin(SitioWeb $sitio, string $login): array
+    {
+        $host = self::estado($sitio)['host'] ?? (string) parse_url($sitio->url, PHP_URL_HOST);
+        $hasta = now()->addMinutes(10)->timestamp;
+
+        return $this->agente->hacerPeticion($sitio, 'cerrojo', [
+            'accion' => 'admin', 'login' => $login, 'hasta' => $hasta,
+            'firma' => InjertoService::firmarMensaje(self::mensajeAdmin($host, $login, $hasta)),
+        ]);
+    }
+
     public function instalar(SitioWeb $sitio): array
     {
         $codigo = self::codigo() ?? throw new \RuntimeException('Falta el archivo de Cerrojo en el panel (' . config('services.cerrojo.archivo') . ').');

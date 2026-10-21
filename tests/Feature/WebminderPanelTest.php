@@ -811,6 +811,31 @@ class WebminderPanelTest extends TestCase
             ->assertDontSee('Actualizar 1.5.1')->assertDontSee('necesita Cerrojo 1.5');
     }
 
+    public function test_desde_el_panel_se_desbloquean_usuarios_y_se_autorizan_admins_con_firma(): void
+    {
+        $publica = $this->clavesInjerto();
+        $this->estadoCerrojo($this->sitio, ['installed' => true, 'version' => '1.6.0', 'mu_plugin' => true, 'pending' => 0, 'permiso_hasta' => 0, 'apartados' => [], 'host' => 'www.acme.test'], '2.7.0');
+        Http::fake(['acme.test/*' => Http::response(['success' => true, 'usuarios' => [
+            ['login' => 'maria', 'email' => 'maria@acme.test', 'roles' => ['editor'], 'fallos' => 5, 'bloqueado' => true, 'admin_confiado' => false, 'degradado' => null, 'cambiar_clave' => false],
+            ['login' => 'fernando', 'email' => 'fernando@ongoing.es', 'roles' => ['subscriber'], 'fallos' => 0, 'bloqueado' => false, 'admin_confiado' => false, 'degradado' => time(), 'cambiar_clave' => false],
+        ]])]);
+        $usuario = User::factory()->create();
+
+        $this->actingAs($usuario)->get(route('webminder-panel.cerrojo.index'))->assertSee(route('webminder-panel.cerrojo.usuarios', $this->sitio));
+        $this->actingAs($usuario)->get(route('webminder-panel.cerrojo.usuarios', $this->sitio))->assertOk()
+            ->assertSee('Bloqueado: 5 intentos')->assertSee('Cerrojo le quitó el rol de administrador')->assertSee('Desbloquear');
+
+        $this->actingAs($usuario)->post(route('webminder-panel.cerrojo.desbloquear', $this->sitio), ['login' => 'maria'])->assertSessionHas('success');
+        Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/cerrojo') && $r['accion'] === 'desbloquear' && $r['login'] === 'maria');
+
+        $this->actingAs($usuario)->post(route('webminder-panel.cerrojo.admin', $this->sitio), ['login' => 'fernando'])->assertSessionHas('success');
+        Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/cerrojo') && $r['accion'] === 'admin' && $r['login'] === 'fernando'
+            && $r['hasta'] > time() && $r['hasta'] <= time() + 600
+            && sodium_crypto_sign_verify_detached(base64_decode($r['firma']), CerrojoService::mensajeAdmin('www.acme.test', 'fernando', $r['hasta']), $publica));
+        // Mismo formato que cerrojo_mensaje_admin() en el plugin
+        $this->assertSame('cerrojo|admin|www.acme.test|fernando|123', CerrojoService::mensajeAdmin('WWW.acme.test', 'fernando', 123));
+    }
+
     public function test_la_pagina_de_cerrojo_muestra_version_permiso_y_apartados(): void
     {
         $this->cerrojoEnPanel('1.5.0');
