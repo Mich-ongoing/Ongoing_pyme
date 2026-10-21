@@ -14,6 +14,9 @@ use App\Webminder\Panel\Services\CapturasService;
 use App\Webminder\Panel\Services\InjertoService;
 use App\Webminder\Panel\Models\InjertoSolicitud;
 use App\Webminder\Panel\Jobs\RevertirItem;
+use App\Webminder\Panel\Jobs\InstalarCerrojo;
+use App\Webminder\Panel\Models\EstadoSitio;
+use App\Webminder\Panel\Services\CerrojoService;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -590,5 +593,84 @@ class WebminderPanelTest extends TestCase
 
         $this->actingAs(User::factory()->create())->get(route('webminder-panel.injerto.show', $s))
             ->assertOk()->assertSee('Aprobar y publicar')->assertSee('&lt;noscript&gt;gtm', false);
+    }
+
+    /** cerrojo.php de pruebas en un archivo temporal, como el que se sube al panel. */
+    private function cerrojoEnPanel(string $version): string
+    {
+        $archivo = tempnam(sys_get_temp_dir(), 'cerrojo');
+        file_put_contents($archivo, "<?php\n/**\n * Plugin Name: Cerrojo\n * Version: {$version}\n */\n");
+        config(['services.cerrojo.archivo' => $archivo]);
+
+        return file_get_contents($archivo);
+    }
+
+    private function estadoCerrojo(SitioWeb $sitio, ?array $cerrojo): void
+    {
+        EstadoSitio::create(['sitio_id' => $sitio->id, 'estado' => 'online', 'datos' => ['cerrojo' => $cerrojo], 'metricas' => [], 'codigo_http' => 200, 'tiempo_respuesta_ms' => 0]);
+    }
+
+    public function test_instalar_cerrojo_envia_el_codigo_firmado_con_la_clave_del_panel(): void
+    {
+        $publica = $this->clavesInjerto();
+        $codigo = $this->cerrojoEnPanel('1.5.0');
+        Http::fake(['acme.test/*' => Http::response(['success' => true, 'version' => '1.5.0'])]);
+
+        $this->actingAs(User::factory()->create())->post(route('webminder-panel.cerrojo.instalar', $this->sitio))
+            ->assertRedirect()->assertSessionHas('success');
+
+        Http::assertSent(fn (Request $req) => str_ends_with($req->url(), '/cerrojo') && $req['accion'] === 'instalar' && $req['codigo'] === $codigo
+            && sodium_crypto_sign_verify_detached(base64_decode($req['firma']), 'cerrojo|codigo|' . hash('sha256', $codigo), $publica));
+    }
+
+    public function test_abrir_la_instalacion_firma_el_dominio_de_cerrojo_y_caduca(): void
+    {
+        $publica = $this->clavesInjerto();
+        // El dominio que usa Cerrojo (su home_url) manda sobre la URL dada de alta en el panel
+        $this->estadoCerrojo($this->sitio, ['installed' => true, 'version' => '1.5.0', 'mu_plugin' => true, 'pending' => 0, 'permiso_hasta' => 0, 'apartados' => [], 'host' => 'www.acme.test']);
+        Http::fake(['acme.test/*' => Http::response(['success' => true])]);
+        $usuario = User::factory()->create();
+
+        $this->actingAs($usuario)->post(route('webminder-panel.cerrojo.permitir', $this->sitio), ['minutos' => 60])->assertSessionHas('success');
+
+        Http::assertSent(function (Request $req) use ($publica) {
+            return str_ends_with($req->url(), '/cerrojo') && $req['accion'] === 'permiso' && abs($req['hasta'] - (time() + 3600)) < 5
+                && sodium_crypto_sign_verify_detached(base64_decode($req['firma']), CerrojoService::mensajePermiso('www.acme.test', $req['hasta']), $publica);
+        });
+        // Mismo formato que cerrojo_mensaje_permiso() en el plugin
+        $this->assertSame('cerrojo|instalar|www.acme.test|123', CerrojoService::mensajePermiso('WWW.acme.test', 123));
+
+        $this->actingAs($usuario)->post(route('webminder-panel.cerrojo.permitir', $this->sitio), ['minutos' => 100000])->assertSessionHasErrors('minutos');
+        $this->actingAs($usuario)->post(route('webminder-panel.cerrojo.cerrar', $this->sitio))->assertSessionHas('success');
+        Http::assertSent(fn (Request $req) => str_ends_with($req->url(), '/cerrojo') && $req['accion'] === 'permiso' && $req['hasta'] === 0);
+    }
+
+    public function test_actualizar_en_todas_solo_encola_las_webs_que_lo_necesitan(): void
+    {
+        Queue::fake();
+        $this->cerrojoEnPanel('1.5.0');
+        $otra = SitioWeb::create(['cliente_id' => $this->sitio->cliente_id, 'nombre' => 'Otra', 'url' => 'https://otra.test/', 'activo' => true, 'estado' => 'online']);
+        $sin_datos = SitioWeb::create(['cliente_id' => $this->sitio->cliente_id, 'nombre' => 'Muda', 'url' => 'https://muda.test/', 'activo' => true, 'estado' => 'online']);
+        $sin_cerrojo = SitioWeb::create(['cliente_id' => $this->sitio->cliente_id, 'nombre' => 'Nueva', 'url' => 'https://nueva.test/', 'activo' => true, 'estado' => 'online']);
+        $this->estadoCerrojo($this->sitio, ['installed' => true, 'version' => '1.4.0', 'mu_plugin' => true, 'pending' => 0]);
+        $this->estadoCerrojo($otra, ['installed' => true, 'version' => '1.5.0', 'mu_plugin' => true, 'pending' => 0]);
+        $this->estadoCerrojo($sin_cerrojo, ['installed' => false]);
+
+        $this->actingAs(User::factory()->create())->post(route('webminder-panel.cerrojo.todos'))->assertSessionHas('success');
+
+        Queue::assertPushed(InstalarCerrojo::class, 2);
+        Queue::assertPushed(InstalarCerrojo::class, fn ($j) => $j->sitioId === $this->sitio->id);
+        Queue::assertPushed(InstalarCerrojo::class, fn ($j) => $j->sitioId === $sin_cerrojo->id);
+    }
+
+    public function test_la_pagina_de_cerrojo_muestra_version_permiso_y_apartados(): void
+    {
+        $this->cerrojoEnPanel('1.5.0');
+        $this->estadoCerrojo($this->sitio, ['installed' => true, 'version' => '1.4.0', 'mu_plugin' => true, 'pending' => 2, 'permiso_hasta' => time() + 600,
+            'apartados' => [['plugin' => 'plugins/insert-headers-and-footers', 'fecha' => time()]], 'host' => 'acme.test']);
+
+        $this->actingAs(User::factory()->create())->get(route('webminder-panel.cerrojo.index'))->assertOk()
+            ->assertSee('Actualizar 1.5.0')->assertSee('abierta hasta las')->assertSee('Cerrar ya')
+            ->assertSee('Apartado plugins/insert-headers-and-footers')->assertSee('2 hallazgos');
     }
 }

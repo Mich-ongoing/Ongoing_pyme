@@ -8,6 +8,7 @@ use App\Webminder\Panel\Http\Controllers\OperacionesController;
 use App\Webminder\Panel\Http\Controllers\AuditoriaController;
 use App\Webminder\Panel\Http\Controllers\IngestaController;
 use App\Webminder\Panel\Http\Controllers\InjertoController;
+use App\Webminder\Panel\Http\Controllers\CerrojoController;
 use App\Webminder\Panel\Http\Controllers\ActualizacionesController;
 
 // Autoactualización del worker: manifiesto y zip (artisan webminder:worker-zip). Públicos: no llevan secretos.
@@ -68,6 +69,14 @@ Route::prefix('webminder-panel')->name('webminder-panel.')->middleware(['web', '
     Route::post('/injerto/{solicitud}/aprobar', [InjertoController::class, 'aprobar'])->name('injerto.aprobar');
     Route::post('/injerto/{solicitud}/rechazar', [InjertoController::class, 'rechazar'])->name('injerto.rechazar');
     Route::post('/injerto/sitios/{sitio}/dominios', [InjertoController::class, 'dominio'])->name('injerto.dominio');
+
+    // Cerrojo: actualizarlo desde aquí y abrir la instalación de plugins (solo se abre desde aquí, firmado)
+    Route::get('/cerrojo', [CerrojoController::class, 'index'])->name('cerrojo.index');
+    Route::post('/cerrojo/todos', [CerrojoController::class, 'instalarTodos'])->name('cerrojo.todos');
+    Route::post('/cerrojo/{sitio}/instalar', [CerrojoController::class, 'instalar'])->name('cerrojo.instalar');
+    Route::post('/cerrojo/{sitio}/permitir', [CerrojoController::class, 'permitir'])->name('cerrojo.permitir');
+    Route::post('/cerrojo/{sitio}/cerrar', [CerrojoController::class, 'cerrar'])->name('cerrojo.cerrar');
+    Route::post('/cerrojo/{sitio}/limpiar', [CerrojoController::class, 'limpiar'])->name('cerrojo.limpiar');
 
     // Auditoría
     Route::get('/auditoria', [AuditoriaController::class, 'index'])->name('auditoria.index');

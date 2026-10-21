@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.4.0
+ * Version:     2.5.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.4.0';
+    const VERSION = '2.5.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -52,6 +52,12 @@ class WebminderAgent {
     // con el usuario admin del cliente). Orden de preferencia.
     const SSO_PREFERRED_EMAILS = ['fernando@ongoing.es', 'soporte@ongoing.es'];
     // ================= END BRAND BLOCK =================
+
+    // Clave pública Ed25519 del panel (la misma que usa Injerto). El código de Cerrojo que
+    // llega por /cerrojo tiene que venir firmado con su privada: el secreto del sitio está
+    // en la BD y no basta para meter código en mu-plugins. ONGOING_WEBMINDER_PANEL_KEY la
+    // sustituye (pruebas).
+    const PANEL_PUBLIC_KEY = 'ofPJ7gfD5deA1nFt7rf6Fbd9B1XUbVfAHwrl+xENuMU=';
 
     // Tolerancia máxima de desfase entre el reloj del firmante y el del
     // servidor. Las firmas ahora se generan en el servidor del panel
@@ -92,6 +98,12 @@ class WebminderAgent {
                 'severity' => 'critical', 'object_type' => 'injerto', 'object_name' => $solicitud['ambito_nombre'] ?? '', 'details' => $solicitud,
             ]);
         });
+        // Lo que Cerrojo bloquea o limpia también llega al log de actividad del panel
+        add_action('cerrojo_aviso', function ($asunto, $texto) {
+            WebminderActivityLog::instance()->log('cerrojo_aviso', [
+                'severity' => 'critical', 'object_type' => 'cerrojo', 'object_name' => $asunto, 'details' => ['texto' => mb_substr((string) $texto, 0, 4000)],
+            ]);
+        }, 10, 2);
         // Migraciones idempotentes. También en rest_api_init: tras un
         // update lanzado desde el panel puede que nadie visite wp-admin,
         // pero el panel sí llama a /status (y la tabla de actividad debe
@@ -510,6 +522,12 @@ class WebminderAgent {
             'permission_callback' => [$this, 'verify_signature']
         ]);
 
+        register_rest_route(self::API_NAMESPACE, '/cerrojo', [
+            'methods'             => 'POST',
+            'callback'            => [$this, 'handle_cerrojo'],
+            'permission_callback' => [$this, 'verify_signature']
+        ]);
+
         register_rest_route(self::API_NAMESPACE, '/ping', [
             'methods'             => 'GET',
             'callback'            => [$this, 'handle_ping'],
@@ -835,7 +853,94 @@ class WebminderAgent {
             'version'    => $head['Version'],
             'mu_plugin'  => strpos(wp_normalize_path($file), wp_normalize_path(WPMU_PLUGIN_DIR)) === 0,
             'pending'    => (int) get_option('cerrojo_pendientes'),
-        ];
+        ] + (function_exists('cerrojo_estado') ? cerrojo_estado() : []); // permiso de instalar y plugins apartados (1.5+)
+    }
+
+    /**
+     * Cerrojo desde el panel: instalarlo o actualizarlo (código firmado por el panel),
+     * abrir o cerrar la instalación de plugins (permiso firmado que comprueba el propio
+     * Cerrojo) y limpiar lo que encuentre.
+     */
+    public function handle_cerrojo(\WP_REST_Request $request) {
+        $p = (array) $request->get_json_params();
+        $accion = (string) ($p['accion'] ?? '');
+        if ($accion === 'instalar') {
+            return $this->cerrojo_instalar((string) ($p['codigo'] ?? ''), (string) ($p['firma'] ?? ''));
+        }
+        if (!function_exists('cerrojo_permiso')) {
+            return new \WP_Error('no_cerrojo', 'Este sitio no tiene Cerrojo 1.5 o posterior: actualízalo primero.', ['status' => 404]);
+        }
+        if ($accion === 'permiso') {
+            return cerrojo_permiso((int) ($p['hasta'] ?? 0), (string) ($p['firma'] ?? ''))
+                ? rest_ensure_response(['success' => true, 'cerrojo' => $this->cerrojo_info()])
+                : new \WP_Error('firma', 'Cerrojo no aceptó la firma del permiso.', ['status' => 403]);
+        }
+        if ($accion === 'limpiar') {
+            if ($bg = $this->in_background($request, __FUNCTION__)) {
+                return $bg;
+            }
+            @set_time_limit(0);
+            if (function_exists('wp_raise_memory_limit')) {
+                wp_raise_memory_limit('admin');
+            }
+            $hechos = cerrojo_escanear(true);
+            // Lo heurístico no se limpia a ciegas: queda para revisarlo en Herramientas → Cerrojo.
+            $quedan = array_merge(array_filter($hechos, fn($l) => strpos($l, 'NO SE PUDO') !== false), array_map('cerrojo_texto', cerrojo_vigilancia()));
+            update_option('cerrojo_pendientes', count($quedan), false);
+            return rest_ensure_response(['success' => true, 'hechos' => array_values($hechos), 'findings' => array_values($quedan), 'cerrojo' => $this->cerrojo_info()]);
+        }
+        return new \WP_Error('accion', 'Acción de Cerrojo desconocida.', ['status' => 400]);
+    }
+
+    /**
+     * Escribe Cerrojo en mu-plugins si viene firmado por el panel y no es más antiguo que
+     * el instalado (una firma vieja no sirve para bajar de versión). Si la web deja de
+     * responder con él, vuelve al anterior.
+     */
+    private function cerrojo_instalar($codigo, $firma) {
+        $clave = base64_decode(defined('ONGOING_WEBMINDER_PANEL_KEY') ? ONGOING_WEBMINDER_PANEL_KEY : self::PANEL_PUBLIC_KEY, true);
+        $f = base64_decode($firma, true);
+        if ($f === false || strlen($f) !== 64 || strlen((string) $clave) !== 32
+            || !sodium_crypto_sign_verify_detached($f, 'cerrojo|codigo|' . hash('sha256', $codigo), $clave)) {
+            return new \WP_Error('firma', 'El código de Cerrojo no viene firmado por el panel.', ['status' => 403]);
+        }
+        if (strpos($codigo, 'Plugin Name: Cerrojo') === false || !preg_match('/^\s*\*\s*Version:\s*([0-9.]+)/m', $codigo, $m)) {
+            return new \WP_Error('codigo', 'Eso no es Cerrojo.', ['status' => 400]);
+        }
+        $info = $this->cerrojo_info();
+        if (!empty($info['version']) && version_compare($m[1], $info['version'], '<')) {
+            return new \WP_Error('version', "Este sitio ya tiene Cerrojo {$info['version']}; no se instala la {$m[1]}.", ['status' => 409]);
+        }
+        $destinos = [WPMU_PLUGIN_DIR . '/cerrojo.php'];
+        // La copia de plugins/ también: al reactivarla se copiaría vieja sobre mu-plugins.
+        if (is_file(WP_PLUGIN_DIR . '/cerrojo/cerrojo.php')) {
+            $destinos[] = WP_PLUGIN_DIR . '/cerrojo/cerrojo.php';
+        }
+        wp_mkdir_p(WPMU_PLUGIN_DIR);
+        $antes = $this->probe_site([home_url('/')]);
+        $anteriores = [];
+        foreach ($destinos as $d) {
+            $anteriores[$d] = is_file($d) ? file_get_contents($d) : null;
+            // Escribir aparte y renombrar: WordPress nunca carga un archivo a medio escribir
+            if (file_put_contents($d . '.nuevo', $codigo) === false || !rename($d . '.nuevo', $d)) {
+                @unlink($d . '.nuevo');
+                $this->cerrojo_volver($anteriores);
+                return new \WP_Error('escritura', 'No se pudo escribir ' . $d, ['status' => 500]);
+            }
+            function_exists('opcache_invalidate') && opcache_invalidate($d, true);
+        }
+        if ($fallos = $this->probe_regressions($antes, $this->probe_site([home_url('/')]))) {
+            $this->cerrojo_volver($anteriores);
+            return new \WP_Error('rompe', 'La web falla con Cerrojo ' . $m[1] . ' (' . implode(', ', $fallos) . '): se ha vuelto a la versión anterior.', ['status' => 500]);
+        }
+        return rest_ensure_response(['success' => true, 'version' => $m[1]]);
+    }
+
+    private function cerrojo_volver($anteriores) {
+        foreach ($anteriores as $d => $codigo) {
+            $codigo === null ? @unlink($d) : file_put_contents($d, $codigo);
+            function_exists('opcache_invalidate') && opcache_invalidate($d, true);
+        }
     }
 
     /**

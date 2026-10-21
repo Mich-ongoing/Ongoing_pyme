@@ -35,12 +35,18 @@ class InjertoService
 
     public static function firmar(int $ambito, array $valores): string
     {
+        return self::firmarMensaje(self::mensaje($ambito, $valores));
+    }
+
+    /** Firma con la clave privada del panel (también la usa Cerrojo; cada uso lleva su prefijo en el mensaje). */
+    public static function firmarMensaje(string $mensaje): string
+    {
         $privada = base64_decode((string) config('services.injerto.clave_privada'), true);
         if (!$privada || strlen($privada) !== SODIUM_CRYPTO_SIGN_SECRETKEYBYTES) {
             throw new \RuntimeException('Falta WEBMINDER_INJERTO_CLAVE (clave privada de Injerto) en el .env');
         }
 
-        return base64_encode(sodium_crypto_sign_detached(self::mensaje($ambito, $valores), $privada));
+        return base64_encode(sodium_crypto_sign_detached($mensaje, $privada));
     }
 
     /** Llega por la ingesta del worker (evento injerto_solicitud). Un reenvío no duplica. */

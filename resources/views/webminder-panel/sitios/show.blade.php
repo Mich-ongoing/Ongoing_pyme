@@ -294,7 +294,7 @@
         <div class="flex flex-wrap items-center justify-between gap-4 mb-4 pb-4 border-b border-slate-800">
             <div>
                 <flux:heading size="lg" class="text-slate-100 font-bold">🔒 Cerrojo</flux:heading>
-                <flux:subheading class="text-slate-400 text-xs">Escáner de backdoors y endurecimiento propio. Limpieza y cuarentena se hacen en el wp-admin (Herramientas → Cerrojo).</flux:subheading>
+                <flux:subheading class="text-slate-400 text-xs">Escáner de backdoors y endurecimiento propio. Actualizarlo, limpiar y abrir la instalación de plugins: en <a href="{{ route('webminder-panel.cerrojo.index') }}" class="underline hover:text-slate-200">Cerrojo</a>.</flux:subheading>
             </div>
             @if($cerrojo['installed'] ?? false)
                 <form action="{{ route('webminder-panel.operaciones.revision-seguridad', $sitio) }}" method="POST" class="m-0">
@@ -311,6 +311,7 @@
             <p class="text-sm {{ $cerrojo['pending'] ? 'text-rose-400 font-semibold' : 'text-emerald-400' }}">
                 v{{ $cerrojo['version'] }}{{ $cerrojo['mu_plugin'] ? ' (mu-plugin)' : ' (plugin normal: se puede desactivar)' }} ·
                 {{ $cerrojo['pending'] ? $cerrojo['pending'] . ' hallazgos en la última revisión' : 'sin hallazgos en la última revisión' }}
+                @if(isset($cerrojo['permiso_hasta'])) · instalar plugins: {{ $cerrojo['permiso_hasta'] ? 'ABIERTO' : 'cerrado' }}@endif
             </p>
         @endif
         @if(session('hallazgos'))

@@ -45,6 +45,11 @@ return [
         'clave_privada' => env('WEBMINDER_INJERTO_CLAVE'),
     ],
 
+    // Cerrojo: la versión que el panel instala en las webs (se sube al desplegar; no va en git).
+    'cerrojo' => [
+        'archivo' => env('WEBMINDER_CERROJO_ARCHIVO', storage_path('app/cerrojo/cerrojo.php')),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

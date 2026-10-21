@@ -42,6 +42,10 @@
                     <span class="text-base">💉</span>
                     <span>Injerto</span>
                 </a>
+                <a href="/webminder-panel/cerrojo" class="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all {{ request()->is('webminder-panel/cerrojo*') ? 'bg-indigo-600 text-white font-semibold shadow-md shadow-indigo-600/30' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200' }}">
+                    <span class="text-base">🔒</span>
+                    <span>Cerrojo</span>
+                </a>
                                 <a href="/webminder-panel/auditoria" class="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all {{ request()->is('webminder-panel/auditoria*') ? 'bg-indigo-600 text-white font-semibold shadow-md shadow-indigo-600/30' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200' }}">
                     <span class="text-base">📜</span>
                     <span>Auditoría</span>

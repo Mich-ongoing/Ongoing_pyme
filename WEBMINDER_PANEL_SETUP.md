@@ -38,6 +38,8 @@ sigue siendo autónomo: el worker solo lee su estado y lanza su revisión.
    actualizaciones y `webminder:verificar` cada hora).
 4. Publicar el worker: `php artisan webminder:worker-zip` (tras cambiar `VERSION` en el plugin).
    Los sitios lo ven como actualización normal de WordPress en ≤12 h.
+5. Cerrojo: copiar el `cerrojo.php` vigente (de `~/Projects/cerrojo`) a `storage/app/cerrojo/cerrojo.php`
+   (no va en git). Es la versión que instala «Actualizar en todas» en la sección Cerrojo.
 
 ## Comparación visual (fase 2)
 
