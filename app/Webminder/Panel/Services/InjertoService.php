@@ -127,9 +127,17 @@ class InjertoService
             ->unique()->sort()->values()->all();
     }
 
-    /** Llamado por webminder:vigilar con la portada ya descargada. */
-    public function revisarScripts(SitioWeb $sitio, string $html): void
+    /**
+     * Llamado por webminder:vigilar con la portada ya descargada ($url: adonde acabó tras las redirecciones).
+     * Si lo que llegó no es la web (otro dominio, la página por defecto de Plesk, un reto anti-bots), no se mira:
+     * así salieron support.plesk.com y uat-proxy.plesk.com en ccmir-mir.com (2026-10-21).
+     */
+    public function revisarScripts(SitioWeb $sitio, string $html, ?string $url = null): void
     {
+        $host = fn ($u) => preg_replace('/^www\./', '', strtolower((string) parse_url((string) $u, PHP_URL_HOST)));
+        if (($url && $host($url) !== $host($sitio->url)) || !preg_match('#/wp-(content|includes)/#', $html)) {
+            return;
+        }
         $vistos = self::dominiosScripts($html, $sitio->url);
         $estado = $sitio->dominios_scripts;
         if ($estado === null) {
@@ -143,11 +151,26 @@ class InjertoService
             return;
         }
         $estado['avisados'] = array_values(array_unique(array_merge($estado['avisados'] ?? [], $nuevos)));
+        // Lo que se vio, para saber de dónde sale sin tener que esperar a que vuelva a pasar
+        foreach ($nuevos as $d) {
+            $estado['evidencias'][$d] = ['fecha' => now()->toIso8601String(), 'url' => $url ?? $sitio->url, 'fragmento' => self::fragmento($html, $d)];
+        }
         $sitio->update(['dominios_scripts' => $estado]);
         AvisosService::enviar("⚠ Script externo nuevo en {$sitio->nombre}",
-            "La portada de {$sitio->url} carga scripts de dominios que no estaban ni se han aprobado:\n\n  · " . implode("\n  · ", $nuevos)
+            "La portada de {$sitio->url} carga scripts de dominios que no estaban ni se han aprobado:\n\n"
+            . collect($nuevos)->map(fn ($d) => "  · {$d}\n    " . $estado['evidencias'][$d]['fragmento'])->implode("\n\n")
             . "\n\nSi es de algo instalado a propósito (un plugin, un chat…), acéptalo en watchWP. Si no, puede ser código inyectado: revisa la web.\n"
             . route('webminder-panel.injerto.index'));
+    }
+
+    /** El <script> donde aparece el dominio (recortado), o el texto de alrededor. */
+    public static function fragmento(string $html, string $dominio): string
+    {
+        preg_match_all('#<script\b[^>]*>.*?</script>#is', $html, $m);
+        $bloque = collect($m[0])->first(fn ($b) => stripos($b, $dominio) !== false) ?? $html;
+        $i = (int) stripos($bloque, $dominio);
+
+        return mb_strcut($bloque, max(0, $i - 200), 400 + strlen($dominio));
     }
 
     public function conocer(SitioWeb $sitio, array $dominios): void
@@ -155,6 +178,7 @@ class InjertoService
         $estado = $sitio->dominios_scripts ?? ['conocidos' => [], 'avisados' => []];
         $estado['conocidos'] = array_values(array_unique(array_merge($estado['conocidos'] ?? [], $dominios)));
         $estado['avisados'] = array_values(array_diff($estado['avisados'] ?? [], $dominios));
+        $estado['evidencias'] = array_diff_key($estado['evidencias'] ?? [], array_flip($dominios));
         $sitio->update(['dominios_scripts' => $estado]);
     }
 
@@ -163,6 +187,7 @@ class InjertoService
     {
         $estado = $sitio->dominios_scripts ?? [];
         $estado['avisados'] = array_values(array_diff($estado['avisados'] ?? [], [$dominio]));
+        unset($estado['evidencias'][$dominio]);
         $sitio->update(['dominios_scripts' => $estado]);
     }
 

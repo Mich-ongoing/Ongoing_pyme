@@ -69,6 +69,7 @@ Route::prefix('webminder-panel')->name('webminder-panel.')->middleware(['web', '
     Route::post('/injerto/{solicitud}/aprobar', [InjertoController::class, 'aprobar'])->name('injerto.aprobar');
     Route::post('/injerto/{solicitud}/rechazar', [InjertoController::class, 'rechazar'])->name('injerto.rechazar');
     Route::post('/injerto/sitios/{sitio}/dominios', [InjertoController::class, 'dominio'])->name('injerto.dominio');
+    Route::post('/injerto/sitios/{sitio}/localizar', [InjertoController::class, 'localizar'])->name('injerto.localizar');
 
     // Cerrojo: actualizarlo desde aquí y abrir la instalación de plugins (solo se abre desde aquí, firmado)
     Route::get('/cerrojo', [CerrojoController::class, 'index'])->name('cerrojo.index');

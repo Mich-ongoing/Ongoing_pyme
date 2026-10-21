@@ -586,6 +586,53 @@ class WebminderPanelTest extends TestCase
         $this->assertNull($this->sitio->refresh()->dominios_scripts); // sin Injerto no se vigila
     }
 
+    public function test_una_pagina_que_no_es_la_web_no_da_avisos_y_el_aviso_guarda_donde_se_vio(): void
+    {
+        config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
+        $this->sitio->update(['tiene_injerto' => true, 'dominios_scripts' => ['conocidos' => [], 'avisados' => []]]);
+        $injerto = app(InjertoService::class);
+
+        // Como en ccmir-mir.com: llegó la página por defecto de Plesk en vez de WordPress
+        $plesk = '<html><head><script src="https://assets.plesk.com/static/default-website-content/public/default-server-index.js"></script>'
+            . '<script>var u="https://support.plesk.com/hc/en-us";</script></head></html>';
+        $injerto->revisarScripts($this->sitio, $plesk, 'https://acme.test/?watchwp=1');
+        $wp = '<html><head><script src="https://acme.test/wp-includes/x.js"></script><script id="malo">var s="https://cdn-robo.example/s.js";</script></head></html>';
+        $injerto->revisarScripts($this->sitio, $wp, 'https://otra-web.example/'); // redirigió fuera
+        $this->assertSame([], $this->sitio->refresh()->dominios_scripts['avisados']);
+        $this->assertSame([], $this->correos());
+
+        $injerto->revisarScripts($this->sitio, $wp, 'https://www.acme.test/?watchwp=2');
+        $estado = $this->sitio->refresh()->dominios_scripts;
+        $this->assertSame(['cdn-robo.example'], $estado['avisados']);
+        $this->assertStringContainsString('<script id="malo">', $estado['evidencias']['cdn-robo.example']['fragmento']);
+        $this->assertStringContainsString('<script id="malo">', $this->correos()[0]->getTextBody());
+
+        $this->actingAs(User::factory()->create())->post(route('webminder-panel.injerto.dominio', $this->sitio), ['dominio' => 'cdn-robo.example', 'accion' => 'olvidar']);
+        $this->assertArrayNotHasKey('cdn-robo.example', $this->sitio->refresh()->dominios_scripts['evidencias']);
+    }
+
+    public function test_localizar_pide_al_worker_donde_esta_el_dominio_y_lo_muestra(): void
+    {
+        $this->sitio->update(['tiene_injerto' => true, 'dominios_scripts' => ['conocidos' => [], 'avisados' => ['cdn-robo.example']]]);
+        $usuario = User::factory()->create();
+        EstadoSitio::create(['sitio_id' => $this->sitio->id, 'estado' => 'online', 'datos' => ['worker_version' => '2.5.1'], 'metricas' => [], 'codigo_http' => 200, 'tiempo_respuesta_ms' => 0]);
+        $this->actingAs($usuario)->get(route('webminder-panel.injerto.index'))->assertSee('Localizar necesita el worker 2.6');
+
+        EstadoSitio::create(['sitio_id' => $this->sitio->id, 'estado' => 'online', 'datos' => ['worker_version' => '2.6.0'], 'metricas' => [], 'codigo_http' => 200, 'tiempo_respuesta_ms' => 0]);
+        Http::fake(['acme.test/*' => Http::response(['success' => true, 'dominio' => 'cdn-robo.example', 'archivos_revisados' => 900,
+            'portada' => ['navegador' => ['codigo' => 200, 'aparece' => true, 'trozo' => '', 'wordpress' => true]],
+            'hallado' => [['donde' => 'Base de datos · opción widget_custom_html', 'trozo' => '<script src="https://cdn-robo.example/s.js">']]])]);
+
+        $this->actingAs($usuario)->from(route('webminder-panel.injerto.index'))
+            ->post(route('webminder-panel.injerto.localizar', $this->sitio), ['dominio' => 'cdn-robo.example'])->assertRedirect(route('webminder-panel.injerto.index'));
+        Http::assertSent(fn (Request $req) => str_ends_with($req->url(), '/localizar') && $req['dominio'] === 'cdn-robo.example');
+        $this->actingAs($usuario)->get(route('webminder-panel.injerto.index'))->assertSee('🔎 Localizar')
+            ->assertSee('opción widget_custom_html')->assertSee('SÍ aparece');
+
+        // Solo dominios avisados: no sirve para buscar cualquier cosa en la web
+        $this->actingAs($usuario)->post(route('webminder-panel.injerto.localizar', $this->sitio), ['dominio' => 'otra.example'])->assertNotFound();
+    }
+
     public function test_la_pagina_de_una_solicitud_se_ve_con_su_codigo(): void
     {
         $s = InjertoSolicitud::create(['sitio_id' => $this->sitio->id, 'remoto_id' => 'abc', 'ambito' => 0, 'ambito_nombre' => 'toda la web',

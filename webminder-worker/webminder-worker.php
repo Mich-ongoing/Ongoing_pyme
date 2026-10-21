@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.5.1
+ * Version:     2.6.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.5.1';
+    const VERSION = '2.6.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -528,6 +528,12 @@ class WebminderAgent {
             'permission_callback' => [$this, 'verify_signature']
         ]);
 
+        register_rest_route(self::API_NAMESPACE, '/localizar', [
+            'methods'             => 'POST',
+            'callback'            => [$this, 'handle_localizar'],
+            'permission_callback' => [$this, 'verify_signature']
+        ]);
+
         register_rest_route(self::API_NAMESPACE, '/ping', [
             'methods'             => 'GET',
             'callback'            => [$this, 'handle_ping'],
@@ -938,6 +944,66 @@ class WebminderAgent {
             return new \WP_Error('rompe', 'La web falla con Cerrojo ' . $m[1] . ' (' . implode(', ', $fallos) . '): se ha vuelto a la versión anterior.', ['status' => 500]);
         }
         return rest_ensure_response(['success' => true, 'version' => $m[1]]);
+    }
+
+    /**
+     * Dónde aparece un dominio en la web: base de datos, archivos y la portada tal como
+     * sale ahora. Para los avisos de «script externo nuevo» del panel. Solo lee.
+     */
+    public function handle_localizar(\WP_REST_Request $request) {
+        $dominio = strtolower(trim((string) ($request->get_json_params()['dominio'] ?? '')));
+        if (!preg_match('/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/', $dominio)) {
+            return new \WP_Error('dominio', 'Dominio no válido.', ['status' => 400]);
+        }
+        if ($bg = $this->in_background($request, __FUNCTION__)) {
+            return $bg;
+        }
+        @set_time_limit(0);
+        global $wpdb;
+        // Unos 300 caracteres alrededor de la primera aparición, para ver qué es
+        $trozo = function ($texto) use ($dominio) {
+            $i = stripos((string) $texto, $dominio);
+            return wp_check_invalid_utf8(substr((string) $texto, max(0, $i - 150), strlen($dominio) + 300), true);
+        };
+        $like = '%' . $wpdb->esc_like($dominio) . '%';
+        $hallado = [];
+        foreach ($wpdb->get_results($wpdb->prepare("SELECT option_name AS r, option_value AS v FROM $wpdb->options WHERE option_value LIKE %s LIMIT 20", $like)) as $r) {
+            $hallado[] = ['donde' => "Base de datos · opción {$r->r}", 'trozo' => $trozo($r->v)];
+        }
+        foreach ($wpdb->get_results($wpdb->prepare("SELECT ID AS r, post_type AS t, post_title AS n, post_content AS v FROM $wpdb->posts WHERE post_content LIKE %s LIMIT 20", $like)) as $r) {
+            $hallado[] = ['donde' => "Base de datos · {$r->t} #{$r->r} «{$r->n}»", 'trozo' => $trozo($r->v)];
+        }
+        foreach ($wpdb->get_results($wpdb->prepare("SELECT post_id AS r, meta_key AS k, meta_value AS v FROM $wpdb->postmeta WHERE meta_value LIKE %s LIMIT 20", $like)) as $r) {
+            $hallado[] = ['donde' => "Base de datos · {$r->k} de la entrada #{$r->r}", 'trozo' => $trozo($r->v)];
+        }
+        // Archivos de texto de toda la web (no copias de BD ni lo ya puesto en cuarentena)
+        $archivos = 0;
+        $it = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator(ABSPATH, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::LEAVES_ONLY, \RecursiveIteratorIterator::CATCH_GET_CHILD);
+        foreach ($it as $f) {
+            $ruta = $f->getPathname();
+            if (!$f->isFile() || $f->getSize() > 3 * MB_IN_BYTES || !preg_match('/\.(php\d?|phtml|js|mjs|html?|json|css|txt|inc|tpl|twig|htaccess)$/i', $ruta)
+                || preg_match('~/(webminder-backups-[^/]+|node_modules|[^/]*\.cuarentena[^/]*)/~', $ruta)) {
+                continue;
+            }
+            $archivos++;
+            $c = (string) @file_get_contents($ruta);
+            if (stripos($c, $dominio) !== false && count($hallado) < 60) {
+                $hallado[] = ['donde' => 'Archivo · ' . str_replace(ABSPATH, '', $ruta) . ' (línea ' . (substr_count(substr($c, 0, stripos($c, $dominio)), "\n") + 1) . ')', 'trozo' => $trozo($c)];
+            }
+        }
+        // La portada ahora, como un navegador y como la vigilancia del panel
+        $portada = [];
+        foreach (['navegador' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36', 'watchWP' => 'watchWP uptime'] as $quien => $ua) {
+            $r = wp_remote_get(add_query_arg('watchwp', time(), home_url('/')), ['timeout' => 30, 'sslverify' => false, 'user-agent' => $ua, 'redirection' => 3]);
+            $html = is_wp_error($r) ? '' : (string) wp_remote_retrieve_body($r);
+            $portada[$quien] = [
+                'codigo'   => is_wp_error($r) ? 0 : (int) wp_remote_retrieve_response_code($r),
+                'aparece'  => stripos($html, $dominio) !== false,
+                'trozo'    => stripos($html, $dominio) !== false ? $trozo($html) : '',
+                'wordpress' => (bool) preg_match('#/wp-(content|includes)/#', $html),
+            ];
+        }
+        return rest_ensure_response(['success' => true, 'dominio' => $dominio, 'portada' => $portada, 'hallado' => $hallado, 'archivos_revisados' => $archivos]);
     }
 
     private function cerrojo_volver($anteriores) {

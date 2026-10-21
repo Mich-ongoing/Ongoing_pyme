@@ -48,7 +48,7 @@ Artisan::command('webminder:vigilar', function (RondaNocturna $ronda, InjertoSer
         }
         // Webs con Injerto: dominios de los scripts de la portada (no páginas de error ni retos de Cloudflare)
         if (!$fallo && $sitio->tiene_injerto && $r->status() === 200) {
-            $injerto->revisarScripts($sitio, $r->body());
+            $injerto->revisarScripts($sitio, $r->body(), (string) $r->effectiveUri());
         }
         $this->line(($fallo ? 'CAÍDA ' : 'ok    ') . $sitio->nombre . ($fallo ? " — {$fallo}" : ''));
     }

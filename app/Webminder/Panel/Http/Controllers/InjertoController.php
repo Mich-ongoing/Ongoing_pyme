@@ -4,6 +4,7 @@ namespace App\Webminder\Panel\Http\Controllers;
 
 use App\Webminder\Panel\Models\InjertoSolicitud;
 use App\Webminder\Panel\Models\SitioWeb;
+use App\Webminder\Panel\Services\AgenteComunicacionService;
 use App\Webminder\Panel\Services\InjertoService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -48,6 +49,19 @@ class InjertoController
         $this->injerto->rechazar($solicitud, $request->user());
 
         return back()->with('success', 'Rechazado: no se publica nada.');
+    }
+
+    /** Busca en la web dónde está un dominio avisado (BD, archivos y la portada de ahora). */
+    public function localizar(Request $request, SitioWeb $sitio, AgenteComunicacionService $agente): RedirectResponse
+    {
+        $dominio = $request->validate(['dominio' => ['required', 'string', 'max:255']])['dominio'];
+        abort_unless(in_array($dominio, $sitio->dominios_scripts['avisados'] ?? [], true), 404);
+        $r = $agente->peticionLarga($sitio, 'localizar', ['dominio' => $dominio], 600);
+        if (!$r['success']) {
+            return back()->with('error', "No se pudo localizar {$dominio} en {$sitio->nombre}: " . ($r['error'] ?? 'error desconocido'));
+        }
+
+        return back()->with('localizado', ['sitio' => $sitio->id, 'dominio' => $dominio] + $r);
     }
 
     /** Aceptar un dominio avisado (ya no avisa) u olvidar el aviso (avisará si vuelve). */
