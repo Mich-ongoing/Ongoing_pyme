@@ -605,9 +605,9 @@ class WebminderPanelTest extends TestCase
         return file_get_contents($archivo);
     }
 
-    private function estadoCerrojo(SitioWeb $sitio, ?array $cerrojo): void
+    private function estadoCerrojo(SitioWeb $sitio, ?array $cerrojo, ?string $worker = '2.5.1'): void
     {
-        EstadoSitio::create(['sitio_id' => $sitio->id, 'estado' => 'online', 'datos' => ['cerrojo' => $cerrojo], 'metricas' => [], 'codigo_http' => 200, 'tiempo_respuesta_ms' => 0]);
+        EstadoSitio::create(['sitio_id' => $sitio->id, 'estado' => 'online', 'datos' => ['cerrojo' => $cerrojo, 'worker_version' => $worker], 'metricas' => [], 'codigo_http' => 200, 'tiempo_respuesta_ms' => 0]);
     }
 
     public function test_instalar_cerrojo_envia_el_codigo_firmado_con_la_clave_del_panel(): void
@@ -652,6 +652,8 @@ class WebminderPanelTest extends TestCase
         $otra = SitioWeb::create(['cliente_id' => $this->sitio->cliente_id, 'nombre' => 'Otra', 'url' => 'https://otra.test/', 'activo' => true, 'estado' => 'online']);
         $sin_datos = SitioWeb::create(['cliente_id' => $this->sitio->cliente_id, 'nombre' => 'Muda', 'url' => 'https://muda.test/', 'activo' => true, 'estado' => 'online']);
         $sin_cerrojo = SitioWeb::create(['cliente_id' => $this->sitio->cliente_id, 'nombre' => 'Nueva', 'url' => 'https://nueva.test/', 'activo' => true, 'estado' => 'online']);
+        $worker_viejo = SitioWeb::create(['cliente_id' => $this->sitio->cliente_id, 'nombre' => 'Vieja', 'url' => 'https://vieja.test/', 'activo' => true, 'estado' => 'online']);
+        $this->estadoCerrojo($worker_viejo, ['installed' => true, 'version' => '1.4.0', 'mu_plugin' => true, 'pending' => 0], null);
         $this->estadoCerrojo($this->sitio, ['installed' => true, 'version' => '1.4.0', 'mu_plugin' => true, 'pending' => 0]);
         $this->estadoCerrojo($otra, ['installed' => true, 'version' => '1.5.0', 'mu_plugin' => true, 'pending' => 0]);
         $this->estadoCerrojo($sin_cerrojo, ['installed' => false]);
@@ -661,6 +663,17 @@ class WebminderPanelTest extends TestCase
         Queue::assertPushed(InstalarCerrojo::class, 2);
         Queue::assertPushed(InstalarCerrojo::class, fn ($j) => $j->sitioId === $this->sitio->id);
         Queue::assertPushed(InstalarCerrojo::class, fn ($j) => $j->sitioId === $sin_cerrojo->id);
+    }
+
+    public function test_la_pagina_de_cerrojo_dice_que_falta_el_worker_y_si_la_copia_subida_no_carga(): void
+    {
+        $this->cerrojoEnPanel('1.5.1');
+        // Como ccmir-mir.com: zip 1.5 subido por Plugins, mu-plugins con la 1.4 y worker 2.4 (no dice su versión)
+        $this->estadoCerrojo($this->sitio, ['installed' => true, 'version' => '1.4.0', 'mu_plugin' => true, 'pending' => 0, 'copia_plugins' => '1.5.0'], null);
+
+        $this->actingAs(User::factory()->create())->get(route('webminder-panel.cerrojo.index'))->assertOk()
+            ->assertSee('actualiza el worker a 2.5')->assertSee('En plugins/cerrojo hay la 1.5.0')->assertSee('comprobar ahora')
+            ->assertDontSee('Actualizar 1.5.1')->assertDontSee('necesita Cerrojo 1.5');
     }
 
     public function test_la_pagina_de_cerrojo_muestra_version_permiso_y_apartados(): void

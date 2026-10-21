@@ -39,7 +39,11 @@
                 <tbody class="divide-y divide-slate-800/60">
                     @foreach($sitios as $sitio)
                         @php
-                            $c = \App\Webminder\Panel\Services\CerrojoService::estado($sitio);
+                            $e = $sitio->estadoActual();
+                            $c = $e?->datos['cerrojo'] ?? null;
+                            // Lo de Cerrojo en el panel (instalar, permiso, limpiar) necesita el worker 2.5+; los anteriores no dicen su versión
+                            $worker = $e?->datos['worker_version'] ?? null;
+                            $worker_ok = $worker && version_compare($worker, '2.5.0', '>=');
                             $instalado = $c['installed'] ?? false;
                             $vieja = $instalado && $version && version_compare($c['version'], $version, '<');
                             $hasta = (int) ($c['permiso_hasta'] ?? 0);
@@ -47,6 +51,10 @@
                         <tr class="align-top">
                             <td class="p-4">
                                 <a href="{{ route('webminder-panel.sitios.show', $sitio) }}" class="text-slate-200 hover:text-white">{{ $sitio->nombre }}</a>
+                                <p class="text-xs text-slate-500">
+                                    {{ $e ? 'comprobada ' . $e->created_at->diffForHumans() : 'nunca comprobada' }} · worker {{ $worker ?? 'anterior a 2.5' }}
+                                    · <a href="{{ route('webminder-panel.sitios.verificar', $sitio) }}" class="underline hover:text-slate-300">comprobar ahora</a>
+                                </p>
                                 @foreach(array_reverse($c['apartados'] ?? []) as $a)
                                     <p class="text-xs text-rose-300">Apartado {{ $a['plugin'] }} · {{ \Illuminate\Support\Carbon::createFromTimestamp($a['fecha'], 'Europe/Madrid')->format('d/m H:i') }}</p>
                                 @endforeach
@@ -55,10 +63,15 @@
                                 @if($c === null)<span class="text-slate-500">sin datos</span>
                                 @elseif(!$instalado)<span class="text-amber-300">no instalado</span>
                                 @else<span class="{{ $vieja ? 'text-amber-300' : 'text-emerald-400' }}">{{ $c['version'] }}{{ $c['mu_plugin'] ? '' : ' (no es mu-plugin)' }}</span>@endif
+                                @if(!empty($c['copia_plugins']))
+                                    <p class="text-xs text-amber-300">En plugins/cerrojo hay la {{ $c['copia_plugins'] }}, pero carga la de mu-plugins. Desde la 1.5.1 se cambia sola al visitar la web; si no, súbela a mu-plugins.</p>
+                                @endif
                             </td>
                             <td class="p-4">
-                                @if(!isset($c['permiso_hasta']))
-                                    <span class="text-slate-500">necesita Cerrojo 1.5</span>
+                                @if(!$worker_ok)
+                                    <span class="text-amber-300">actualiza el worker a 2.5 (en Actualizaciones de la web)</span>
+                                @elseif(!isset($c['permiso_hasta']))
+                                    <span class="text-amber-300">necesita Cerrojo 1.5</span>
                                 @elseif($hasta === -1)
                                     <span class="text-amber-300">abierta en wp-config</span>
                                 @elseif($hasta > 0)
@@ -83,13 +96,13 @@
                             </td>
                             <td class="p-4">
                                 <div class="flex flex-wrap gap-2 justify-end">
-                                    @if($version && $c !== null && (!$instalado || $vieja))
+                                    @if($worker_ok && $version && (!$instalado || $vieja))
                                         <form method="POST" action="{{ route('webminder-panel.cerrojo.instalar', $sitio) }}">
                                             @csrf
                                             <button class="{{ $boton }} bg-indigo-600 hover:bg-indigo-500 text-white">{{ $instalado ? 'Actualizar' : 'Instalar' }} {{ $version }}</button>
                                         </form>
                                     @endif
-                                    @if(isset($c['permiso_hasta']))
+                                    @if($worker_ok && isset($c['permiso_hasta']))
                                         <form method="POST" action="{{ route('webminder-panel.cerrojo.limpiar', $sitio) }}">
                                             @csrf
                                             <button class="{{ $boton }} bg-slate-800 hover:bg-slate-700 text-slate-200">Limpiar</button>

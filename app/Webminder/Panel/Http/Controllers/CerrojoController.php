@@ -37,9 +37,11 @@ class CerrojoController
         }
         $n = 0;
         foreach (SitioWeb::where('activo', true)->get() as $sitio) {
-            $estado = CerrojoService::estado($sitio);
-            // Sin estado no sabemos ni si el worker contesta: mejor verificar el sitio antes
-            if ($estado !== null && (!($estado['installed'] ?? false) || version_compare((string) ($estado['version'] ?? '0'), $version, '<'))) {
+            $datos = $sitio->estadoActual()?->datos ?? [];
+            $estado = $datos['cerrojo'] ?? null;
+            // Solo el worker 2.5+ sabe instalar Cerrojo; sin estado no sabemos ni si contesta
+            if (version_compare((string) ($datos['worker_version'] ?? '0'), '2.5.0', '>=') && $estado !== null
+                && (!($estado['installed'] ?? false) || version_compare((string) ($estado['version'] ?? '0'), $version, '<'))) {
                 InstalarCerrojo::dispatch($sitio->id);
                 $n++;
             }

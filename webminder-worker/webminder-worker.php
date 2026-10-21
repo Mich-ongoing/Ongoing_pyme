@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.5.0
+ * Version:     2.5.1
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.5.0';
+    const VERSION = '2.5.1';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -848,9 +848,13 @@ class WebminderAgent {
         }
         $file = (new \ReflectionFunction('cerrojo_vigilancia'))->getFileName();
         $head = get_file_data($file, ['Version' => 'Version']);
+        // Si se subió una versión por Plugins y no llegó a mu-plugins, la que carga sigue siendo la vieja
+        $copia = WP_PLUGIN_DIR . '/cerrojo/cerrojo.php';
+        $copia = is_file($copia) && wp_normalize_path($copia) !== wp_normalize_path($file) ? get_file_data($copia, ['Version' => 'Version'])['Version'] : null;
         return [
             'installed'  => true,
             'version'    => $head['Version'],
+            'copia_plugins' => $copia !== $head['Version'] ? $copia : null,
             'mu_plugin'  => strpos(wp_normalize_path($file), wp_normalize_path(WPMU_PLUGIN_DIR)) === 0,
             'pending'    => (int) get_option('cerrojo_pendientes'),
         ] + (function_exists('cerrojo_estado') ? cerrojo_estado() : []); // permiso de instalar y plugins apartados (1.5+)
@@ -1527,6 +1531,7 @@ class WebminderAgent {
             'environment' => $this->get_environment_info(),
             'site_health_summary' => ($site_health = $this->run_site_health()) ? ($site_health['summary'] ?? []) : [],
             'cerrojo' => $this->cerrojo_info(),
+            'worker_version' => self::VERSION, // el panel lo usa para saber qué puede pedir
             // El panel vigila los scripts de la portada de las webs con Injerto
             'injerto' => defined('INJERTO_VERSION') ? ['version' => INJERTO_VERSION] : null,
         ];
