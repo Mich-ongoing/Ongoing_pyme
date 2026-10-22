@@ -241,6 +241,19 @@
                         <button type="submit" class="px-4 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 hover:bg-amber-500/20 text-xs font-semibold transition cursor-pointer">🚪 Desconectar a todos</button>
                     </form>
                 </div>
+                @if(version_compare($estado_actual?->datos['worker_version'] ?? '0', '2.10.0', '>='))
+                    <div class="flex flex-wrap items-center justify-between gap-4 py-4">
+                        <div class="max-w-2xl">
+                            <h4 class="text-sm font-semibold text-slate-200">Actualizar claves secretas</h4>
+                            <p class="text-xs text-slate-400 mt-1">Pone valores nuevos a las claves y sales de wp-config.php. Las cookies robadas dejan de valer y todos los usuarios tienen que volver a entrar. No se puede deshacer.</p>
+                        </div>
+                        <form action="{{ route('webminder-panel.sitios.sesiones', $sitio) }}" method="POST" class="m-0" onsubmit="return confirm(@js('¿Generar claves secretas nuevas en ' . $sitio->nombre . '? Se desconecta a todos los usuarios y no se puede deshacer.'))">
+                            @csrf
+                            <input type="hidden" name="accion" value="claves">
+                            <button type="submit" class="px-4 py-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 hover:bg-rose-500/20 text-xs font-semibold transition cursor-pointer">🔐 Generar claves nuevas</button>
+                        </form>
+                    </div>
+                @endif
             </div>
         @endif
     </flux:card>

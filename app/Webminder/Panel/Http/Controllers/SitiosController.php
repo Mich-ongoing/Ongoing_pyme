@@ -189,10 +189,10 @@ class SitiosController
         );
     }
 
-    /** Cierra la sesión de todos los usuarios de la web (y con forzar_clave les exige contraseña nueva). */
+    /** Cierra la sesión de todos los usuarios de la web (forzar_clave además les exige contraseña nueva; claves renueva las de wp-config.php). */
     public function sesiones(Request $request, SitioWeb $sitio): RedirectResponse
     {
-        $accion = $request->validate(['accion' => ['required', 'in:cerrar,forzar_clave']])['accion'];
+        $accion = $request->validate(['accion' => ['required', 'in:cerrar,forzar_clave,claves']])['accion'];
         $resultado = $this->agente->sesiones($sitio, $accion);
 
         return back()->with($resultado['success'] ? 'success' : 'error', $resultado['success'] ? $resultado['message'] : 'La web no lo aplicó: ' . $resultado['error']);

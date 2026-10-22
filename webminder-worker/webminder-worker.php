@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.9.0
+ * Version:     2.10.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.9.0';
+    const VERSION = '2.10.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -1061,8 +1061,11 @@ class WebminderAgent {
     /** Cierra la sesión de todos los usuarios y, con forzar_clave, les exige una contraseña nueva al volver. */
     public function handle_sesiones(\WP_REST_Request $request) {
         $accion = $request->get_json_params()['accion'] ?? '';
-        if (!in_array($accion, ['cerrar', 'forzar_clave'], true)) {
+        if (!in_array($accion, ['cerrar', 'forzar_clave', 'claves'], true)) {
             return new \WP_Error('accion', 'Acción no válida.', ['status' => 400]);
+        }
+        if ($accion === 'claves' && is_wp_error($r = $this->renovar_claves())) {
+            return $r;
         }
         if ($accion === 'forzar_clave') {
             update_option(self::OPTION_CLAVE_DESDE, time(), false);
@@ -1071,10 +1074,55 @@ class WebminderAgent {
 
         return rest_ensure_response([
             'success' => true,
-            'message' => $accion === 'forzar_clave'
-                ? 'Sesiones cerradas. Cada usuario tendrá que crear una contraseña nueva la próxima vez que entre.'
-                : 'Sesiones cerradas: todos los usuarios tendrán que volver a entrar.',
+            'message' => [
+                'forzar_clave' => 'Sesiones cerradas. Cada usuario tendrá que crear una contraseña nueva la próxima vez que entre.',
+                'claves' => 'Claves secretas de wp-config.php renovadas: todos los usuarios tendrán que volver a entrar.',
+            ][$accion] ?? 'Sesiones cerradas: todos los usuarios tendrán que volver a entrar.',
         ]);
+    }
+
+    /** Pone valores nuevos a las 8 claves y sales de wp-config.php; no escribe nada si falta alguna. */
+    private function renovar_claves() {
+        // El mismo wp-config.php que carga WordPress (wp-load.php)
+        $f = file_exists(ABSPATH . 'wp-config.php') ? ABSPATH . 'wp-config.php' : dirname(ABSPATH) . '/wp-config.php';
+        $codigo = is_file($f) ? (string) file_get_contents($f) : '';
+        if ($codigo === '' || !is_writable($f) || !is_writable(dirname($f))) {
+            return new \WP_Error('claves', 'No se puede escribir en wp-config.php.', ['status' => 500]);
+        }
+        $nuevas = [];
+        foreach (['AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY', 'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT'] as $k) {
+            $nuevas[$k] = wp_generate_password(64, true, true); // sin comillas ni barras
+            $codigo = preg_replace_callback('/define\s*\(\s*([\'"])' . $k . '\1\s*,\s*(?:\'(?:[^\'\\\\]|\\\\.)*\'|"(?:[^"\\\\]|\\\\.)*")\s*\)/',
+                fn() => "define( '$k', '" . $nuevas[$k] . "' )", $codigo, -1, $n);
+            if ($n !== 1) {
+                return new \WP_Error('claves', "No encuentro $k (una sola vez y con valor entre comillas) en wp-config.php: no se ha cambiado nada.", ['status' => 409]);
+            }
+        }
+        try {
+            token_get_all($codigo, TOKEN_PARSE);
+        } catch (\ParseError $e) {
+            return new \WP_Error('claves', 'El wp-config.php resultante no sería válido: no se ha cambiado nada.', ['status' => 500]);
+        }
+        // Copia temporal + rename: nunca queda un wp-config.php a medias
+        $tmp = $f . '.webminder-' . wp_generate_password(8, false);
+        if (file_put_contents($tmp, $codigo, LOCK_EX) !== strlen($codigo) || !@chmod($tmp, fileperms($f) & 0777) || !@rename($tmp, $f)) {
+            @unlink($tmp);
+            return new \WP_Error('claves', 'No se pudo guardar wp-config.php: no se ha cambiado nada.', ['status' => 500]);
+        }
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate($f, true);
+        }
+        // Cerrojo firma su lista de plugins con AUTH_KEY.SECURE_AUTH_SALT: se vuelve a firmar si era válida
+        $o = get_option('cerrojo_plugins');
+        if (is_array($o) && defined('AUTH_KEY') && defined('SECURE_AUTH_SALT')) {
+            $datos = implode("\n", (array) ($o['lista'] ?? []));
+            if (hash_equals(hash_hmac('sha256', $datos, AUTH_KEY . SECURE_AUTH_SALT), (string) ($o['firma'] ?? ''))) {
+                $o['firma'] = hash_hmac('sha256', $datos, $nuevas['AUTH_KEY'] . $nuevas['SECURE_AUTH_SALT']);
+                update_option('cerrojo_plugins', $o, true);
+            }
+        }
+
+        return true;
     }
 
     /** Manda un correo de prueba por wp_mail (el mismo camino que los formularios). */

@@ -789,6 +789,8 @@ class WebminderPanelTest extends TestCase
 
         $this->actingAs($usuario)->post(route('webminder-panel.sitios.sesiones', $this->sitio), ['accion' => 'forzar_clave'])->assertSessionHas('success', 'Sesiones cerradas.');
         Http::assertSent(fn (Request $req) => str_ends_with($req->url(), '/sesiones') && $req['accion'] === 'forzar_clave');
+        $this->actingAs($usuario)->post(route('webminder-panel.sitios.sesiones', $this->sitio), ['accion' => 'claves'])->assertSessionHas('success');
+        Http::assertSent(fn (Request $req) => str_ends_with($req->url(), '/sesiones') && $req['accion'] === 'claves');
         $this->actingAs($usuario)->post(route('webminder-panel.sitios.sesiones', $this->sitio), ['accion' => 'borrar_todo'])->assertSessionHasErrors('accion');
 
         EstadoSitio::create(['sitio_id' => $this->sitio->id, 'estado' => 'online', 'datos' => ['worker_version' => '2.9.0', 'plugins_list' => [['file' => 'a/a.php', 'name' => 'A', 'version' => '1', 'wporg' => true]]], 'metricas' => [], 'codigo_http' => 200, 'tiempo_respuesta_ms' => 0]);
