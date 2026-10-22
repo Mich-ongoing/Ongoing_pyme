@@ -218,6 +218,12 @@ class AgenteComunicacionService
         }
     }
 
+    /** Correo de prueba por wp_mail() en la web, el mismo camino que sus formularios (worker ≥ 2.8). */
+    public function probarCorreo(SitioWeb $sitio, string $para): array
+    {
+        return $this->hacerPeticion($sitio, 'probar-correo', ['para' => $para], null, 60);
+    }
+
     public function activarMantenimiento(SitioWeb $sitio): array
     {
         return $this->hacerPeticion($sitio, 'maintenance-mode', ['active' => true]);

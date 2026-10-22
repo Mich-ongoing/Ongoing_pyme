@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.7.1
+ * Version:     2.8.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.7.1';
+    const VERSION = '2.8.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -83,6 +83,9 @@ class WebminderAgent {
     const OPTION_UPDATE_LOCK = 'ongoing_webminder_update_lock';
     const OPTION_BACKUP_DIR = 'ongoing_webminder_backup_dir';
     const OPTION_JOB_PREFIX = 'ongoing_webminder_job_';
+    const OPTION_CORREO = 'ongoing_webminder_correo';
+
+    private $via_correo = null;
 
     public function __construct() {
         register_activation_hook(__FILE__, [$this, 'activate']);
@@ -128,6 +131,29 @@ class WebminderAgent {
         // Sonda del chequeo post-actualización: si llega aquí, el admin cargó todos los plugins sin fatal
         add_action('wp_ajax_nopriv_webminder_probe', [$this, 'ajax_probe']);
         add_action('wp_ajax_webminder_probe', [$this, 'ajax_probe']);
+
+        // Último envío de correo (formularios incluidos): el panel lo enseña para saber si llegan
+        add_action('phpmailer_init', function ($phpmailer) {
+            $this->via_correo = $phpmailer->Mailer; // 'mail' = PHP mail() sin SMTP
+        }, PHP_INT_MAX);
+        add_action('wp_mail_succeeded', function () {
+            $this->anotar_correo(true);
+        });
+        add_action('wp_mail_failed', function ($error) {
+            $this->anotar_correo(false, $error->get_error_message());
+        });
+    }
+
+    private function anotar_correo($ok, $error = '') {
+        $c = (array) get_option(self::OPTION_CORREO, []);
+        $c[$ok ? 'ultimo_ok' : 'ultimo_error'] = time();
+        if (!$ok) {
+            $c['error'] = mb_substr((string) $error, 0, 500);
+        }
+        if ($this->via_correo) {
+            $c['via'] = $this->via_correo;
+        }
+        update_option(self::OPTION_CORREO, $c, false);
     }
 
     public function ajax_probe() {
@@ -531,6 +557,12 @@ class WebminderAgent {
         register_rest_route(self::API_NAMESPACE, '/localizar', [
             'methods'             => 'POST',
             'callback'            => [$this, 'handle_localizar'],
+            'permission_callback' => [$this, 'verify_signature']
+        ]);
+
+        register_rest_route(self::API_NAMESPACE, '/probar-correo', [
+            'methods'             => 'POST',
+            'callback'            => [$this, 'handle_probar_correo'],
             'permission_callback' => [$this, 'verify_signature']
         ]);
 
@@ -981,6 +1013,28 @@ class WebminderAgent {
      * Dónde aparece un dominio en la web: base de datos, archivos y la portada tal como
      * sale ahora. Para los avisos de «script externo nuevo» del panel. Solo lee.
      */
+    /** Manda un correo de prueba por wp_mail (el mismo camino que los formularios). */
+    public function handle_probar_correo(\WP_REST_Request $request) {
+        $para = sanitize_email((string) ($request->get_json_params()['para'] ?? ''));
+        if (!is_email($para)) {
+            return new \WP_Error('para', 'Correo no válido.', ['status' => 400]);
+        }
+        $error = '';
+        $capturar = function ($e) use (&$error) {
+            $error = $e->get_error_message();
+        };
+        add_action('wp_mail_failed', $capturar);
+        $ok = wp_mail($para, 'Prueba de correo de ' . wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES),
+            "Correo de prueba enviado desde watchWP por " . home_url() . ".\nSi te ha llegado, los formularios de esta web pueden enviar correo.");
+        remove_action('wp_mail_failed', $capturar);
+
+        return rest_ensure_response([
+            'success' => $ok,
+            'error'   => $ok ? null : ($error ?: 'wp_mail() devolvió false sin dar motivo.'),
+            'correo'  => get_option(self::OPTION_CORREO),
+        ]);
+    }
+
     public function handle_localizar(\WP_REST_Request $request) {
         $dominio = strtolower(trim((string) ($request->get_json_params()['dominio'] ?? '')));
         if (!preg_match('/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/', $dominio)) {
@@ -1628,6 +1682,7 @@ class WebminderAgent {
             'environment' => $this->get_environment_info(),
             'site_health_summary' => ($site_health = $this->run_site_health()) ? ($site_health['summary'] ?? []) : [],
             'cerrojo' => $this->cerrojo_info(),
+            'correo' => get_option(self::OPTION_CORREO) ?: null,
             'worker_version' => self::VERSION, // el panel lo usa para saber qué puede pedir
             // El panel vigila los scripts de la portada de las webs con Injerto
             'injerto' => defined('INJERTO_VERSION') ? ['version' => INJERTO_VERSION] : null,

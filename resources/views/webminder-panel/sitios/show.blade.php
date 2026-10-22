@@ -153,6 +153,51 @@
         @endif
     </flux:card>
 
+    <!-- Correo: ¿llegan los formularios? -->
+    @php
+        $correo = $estado_actual?->correo();
+        $puede_probar_correo = version_compare($estado_actual?->datos['worker_version'] ?? '0', '2.8.0', '>=');
+        $correo_falla = $correo && ($correo['ultimo_error'] ?? 0) > ($correo['ultimo_ok'] ?? 0);
+    @endphp
+    <flux:card class="bg-slate-950/60 border border-slate-800 p-6 rounded-2xl mb-8">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+            <div>
+                <flux:heading size="lg" class="text-slate-100 font-bold">📬 Correo de la web (formularios)</flux:heading>
+                @if(!$puede_probar_correo)
+                    <p class="text-sm text-slate-500 mt-2">Necesita el worker 2.8 o superior.</p>
+                @elseif(!$correo)
+                    <p class="text-sm text-slate-500 mt-2">La web no ha enviado ningún correo desde que tiene el worker 2.8. Manda una prueba.</p>
+                @else
+                    <p class="text-sm mt-2 {{ $correo_falla ? 'text-rose-400' : 'text-emerald-400' }}">
+                        {{ $correo_falla ? '❌ El último envío falló' : '✅ El último envío salió bien' }}
+                    </p>
+                    <p class="text-xs text-slate-400 mt-1">
+                        Último correo enviado: {{ isset($correo['ultimo_ok']) ? \Illuminate\Support\Carbon::createFromTimestamp($correo['ultimo_ok'])->diffForHumans() : 'nunca' }}
+                        @isset($correo['ultimo_error'])
+                            · Último fallo: {{ \Illuminate\Support\Carbon::createFromTimestamp($correo['ultimo_error'])->diffForHumans() }}
+                        @endisset
+                    </p>
+                    @if($correo_falla && !empty($correo['error']))
+                        <p class="text-xs text-rose-300 mt-1"><code>{{ $correo['error'] }}</code></p>
+                    @endif
+                    @if(($correo['via'] ?? null) === 'mail')
+                        <p class="text-xs text-amber-400 mt-1">⚠️ Envía con PHP mail(), sin SMTP: suele acabar en spam o no llegar. Configura un SMTP.</p>
+                    @elseif(isset($correo['via']))
+                        <p class="text-xs text-slate-400 mt-1">Envía por: <strong class="text-slate-200">{{ $correo['via'] }}</strong></p>
+                    @endif
+                @endif
+            </div>
+            @if($puede_probar_correo)
+                <form action="{{ route('webminder-panel.sitios.probar-correo', $sitio) }}" method="POST" class="m-0">
+                    @csrf
+                    <button type="submit" class="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer">
+                        ✉️ Enviarme un correo de prueba
+                    </button>
+                </form>
+            @endif
+        </div>
+    </flux:card>
+
     <!-- Grid: Admin Users & Environment -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
         <!-- Section 2: Admin Users -->

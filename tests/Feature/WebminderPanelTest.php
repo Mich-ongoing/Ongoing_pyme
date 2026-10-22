@@ -721,6 +721,30 @@ class WebminderPanelTest extends TestCase
         $this->actingAs($usuario)->post(route('webminder-panel.injerto.localizar', $this->sitio), ['dominio' => 'otra.example'])->assertNotFound();
     }
 
+    public function test_php_por_debajo_de_8_1_es_riesgo_alto(): void
+    {
+        $estado = fn ($php) => new EstadoSitio(['datos' => ['php_version' => $php, 'security_audit' => ['score' => 95, 'checks' => []]]]);
+        $this->assertSame(49, $estado('8.0.30')->puntuacionSeguridad());
+        $this->assertSame('danger', $estado('7.4.33')->seguridad()['checks'][0]['status']);
+        $this->assertSame(95, $estado('8.1.0')->puntuacionSeguridad());
+        $this->assertSame(100, (new EstadoSitio(['datos' => []]))->puntuacionSeguridad()); // sin dato no penaliza
+    }
+
+    public function test_el_correo_de_prueba_lo_manda_la_web_y_se_ve_si_el_ultimo_envio_fallo(): void
+    {
+        $usuario = User::factory()->create();
+        Http::fake(['acme.test/*' => Http::sequence()
+            ->push(['success' => false, 'error' => 'SMTP Error: Could not authenticate.'])
+            ->push(['success' => true, 'data' => ['worker_version' => '2.8.0', 'correo' => ['ultimo_ok' => time() - 86400, 'ultimo_error' => time(), 'error' => 'SMTP Error: Could not authenticate.', 'via' => 'smtp']]])]);
+
+        $this->actingAs($usuario)->from(route('webminder-panel.sitios.show', $this->sitio))
+            ->post(route('webminder-panel.sitios.probar-correo', $this->sitio))
+            ->assertSessionHas('error', 'La web no pudo enviar el correo: SMTP Error: Could not authenticate.');
+        Http::assertSent(fn (Request $req) => str_ends_with($req->url(), '/probar-correo') && $req['para'] === $usuario->email);
+        $this->actingAs($usuario)->get(route('webminder-panel.sitios.show', $this->sitio))
+            ->assertSee('El último envío falló')->assertSee('Could not authenticate');
+    }
+
     public function test_la_pagina_de_una_solicitud_se_ve_con_su_codigo(): void
     {
         $s = InjertoSolicitud::create(['sitio_id' => $this->sitio->id, 'remoto_id' => 'abc', 'ambito' => 0, 'ambito_nombre' => 'toda la web',

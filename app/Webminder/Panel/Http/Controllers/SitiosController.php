@@ -172,6 +172,21 @@ class SitiosController
             : back()->with('error', $resultado['error']);
     }
 
+    /** Manda un correo de prueba desde la web al usuario del panel y refresca el estado para ver el resultado. */
+    public function probarCorreo(Request $request, SitioWeb $sitio): RedirectResponse
+    {
+        $para = $request->user()->email;
+        $resultado = $this->agente->probarCorreo($sitio, $para);
+        $this->agente->obtenerStatus($sitio);
+
+        return back()->with(
+            $resultado['success'] ? 'success' : 'error',
+            $resultado['success']
+                ? "La web aceptó el envío a {$para}. Mira que te llega (y que no está en spam): si llega, los formularios también."
+                : 'La web no pudo enviar el correo: ' . $resultado['error']
+        );
+    }
+
     public function desconectar(SitioWeb $sitio): RedirectResponse
     {
         $resultado = $this->agente->desconectar($sitio);

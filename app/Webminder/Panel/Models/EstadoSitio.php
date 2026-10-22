@@ -73,10 +73,29 @@ class EstadoSitio extends Model
      */
     public function seguridad(): array
     {
-        return $this->datos['security_audit'] ?? [
-            'score' => 100,
-            'checks' => [],
-        ];
+        $auditoria = $this->datos['security_audit'] ?? ['score' => 100, 'checks' => []];
+        if ($php = $this->datos['php_version'] ?? null) {
+            array_unshift($auditoria['checks'], $this->phpSinSoporte() ? [
+                'id' => 'php', 'label' => 'Versión de PHP', 'status' => 'danger',
+                'message' => "PHP {$php} ya no recibe parches de seguridad. Pide al hosting subir a PHP " . self::PHP_MINIMO . ' o superior.',
+            ] : [
+                'id' => 'php', 'label' => 'Versión de PHP', 'status' => 'pass',
+                'message' => "PHP {$php}.",
+            ]);
+        }
+        $auditoria['score'] = $this->puntuacionSeguridad();
+
+        return $auditoria;
+    }
+
+    /** Por debajo de esta versión de PHP la web es «Riesgo alto» aunque lo demás esté bien. */
+    public const PHP_MINIMO = '8.1';
+
+    public function phpSinSoporte(): bool
+    {
+        $php = $this->datos['php_version'] ?? null;
+
+        return $php && version_compare($php, self::PHP_MINIMO, '<');
     }
 
     /**
@@ -84,7 +103,18 @@ class EstadoSitio extends Model
      */
     public function puntuacionSeguridad(): int
     {
-        return $this->datos['security_audit']['score'] ?? 100;
+        $score = $this->datos['security_audit']['score'] ?? 100;
+
+        // < 50 es lo que las vistas pintan como «Riesgo»
+        return $this->phpSinSoporte() ? min($score, 49) : $score;
+    }
+
+    /**
+     * Último envío de correo de la web (worker ≥ 2.8): ultimo_ok, ultimo_error, error, via.
+     */
+    public function correo(): ?array
+    {
+        return $this->datos['correo'] ?? null;
     }
 
     /**
