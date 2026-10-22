@@ -43,6 +43,8 @@ Route::prefix('webminder-panel')->name('webminder-panel.')->middleware(['web', '
     Route::get('/sitios/{sitio}/paquetes', [SitiosController::class, 'paquetes'])->name('sitios.paquetes');
     Route::post('/sitios/{sitio}/regenerar-credenciales', [SitiosController::class, 'regenerarCredenciales'])->name('sitios.regenerar-credenciales');
     Route::get('/sitios/{sitio}/credenciales', [SitiosController::class, 'credenciales'])->name('sitios.credenciales');
+    Route::post('/sitios/{sitio}/sesiones', [SitiosController::class, 'sesiones'])->name('sitios.sesiones');
+    Route::post('/sitios/{sitio}/reinstalar-plugins', [SitiosController::class, 'reinstalarPlugins'])->name('sitios.reinstalar-plugins');
     Route::post('/sitios/{sitio}/probar-correo', [SitiosController::class, 'probarCorreo'])->name('sitios.probar-correo');
     Route::post('/sitios/{sitio}/desconectar', [SitiosController::class, 'desconectar'])->name('sitios.desconectar');
 

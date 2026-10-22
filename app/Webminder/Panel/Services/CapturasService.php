@@ -3,6 +3,7 @@
 namespace App\Webminder\Panel\Services;
 
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Sleep;
@@ -34,7 +35,7 @@ class CapturasService
 
     public function activa(): bool
     {
-        return config('services.capturas.cuenta') && config('services.capturas.token');
+        return config('services.capturas.cuenta') && config('services.capturas.token') && !Cache::has('watchwp-capturas-agotadas');
     }
 
     /**
@@ -66,6 +67,12 @@ class CapturasService
                     continue;
                 }
                 if ($r->status() === 429) {
+                    // Cuota diaria gastada (Retry-After de horas): sin capturas hasta que vuelva, en vez de esperar en cada plugin
+                    if ((int) $r->header('Retry-After') > 60) {
+                        Cache::put('watchwp-capturas-agotadas', true, now()->addSeconds((int) $r->header('Retry-After')));
+
+                        return array_fill_keys(array_keys(self::VISTAS), null);
+                    }
                     Sleep::for(min(60, max(10, (int) $r->header('Retry-After'))))->seconds();
                     continue;
                 }

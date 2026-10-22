@@ -22,6 +22,8 @@ delete_option('ongoing_webminder_update_failures');
 delete_option('ongoing_webminder_last_update_check');
 delete_option('ongoing_webminder_panel_url');
 delete_option('ongoing_webminder_correo');
+delete_option('ongoing_webminder_clave_desde');
+delete_metadata('user', 0, 'webminder_clave_cambiada', '', true);
 delete_option('ongoing_webminder_update_lock');
 
 // 1b. Log de actividad local: tabla y cron

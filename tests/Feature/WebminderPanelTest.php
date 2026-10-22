@@ -363,6 +363,18 @@ class WebminderPanelTest extends TestCase
         Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/rollback') && $r->data()['backup'] === 'a-backup-123' && $r->data()['item'] === 'a/a.php');
     }
 
+    public function test_con_la_cuota_de_capturas_gastada_no_se_espera_en_cada_plugin(): void
+    {
+        // 21-oct: Cloudflare respondía 429 con Retry-After de 12 h y cada plugin esperaba ~25 min
+        config(['services.capturas.cuenta' => 'cuenta', 'services.capturas.token' => 't']);
+        Http::fake(['*' => Http::response(['errors' => [['code' => 2001]]], 429, ['Retry-After' => '44581'])]);
+        $c = app(CapturasService::class);
+
+        $this->assertSame(['escritorio' => null, 'movil' => null], $c->capturar('https://acme.test'));
+        Http::assertSentCount(1);
+        $this->assertFalse($c->activa());
+    }
+
     public function test_una_peticion_que_no_llega_a_wordpress_se_repite(): void
     {
         // Como ccmir-mir.com: 1 de cada 3 peticiones acababa en la 404 de Plesk (HTML), sin llegar a WordPress
@@ -743,6 +755,45 @@ class WebminderPanelTest extends TestCase
         Http::assertSent(fn (Request $req) => str_ends_with($req->url(), '/probar-correo') && $req['para'] === $usuario->email);
         $this->actingAs($usuario)->get(route('webminder-panel.sitios.show', $this->sitio))
             ->assertSee('El último envío falló')->assertSee('Could not authenticate');
+    }
+
+    public function test_reinstalar_lanza_un_lote_solo_con_los_plugins_de_wordpress_org(): void
+    {
+        $usuario = User::factory()->create();
+        $plugins = [
+            ['file' => 'akismet/akismet.php', 'name' => 'Akismet', 'version' => '5.3', 'wporg' => true],
+            ['file' => 'elementor-pro/elementor-pro.php', 'name' => 'Elementor Pro', 'version' => '3.20', 'wporg' => false],
+        ];
+        Http::fake(fn (Request $req) => str_ends_with($req->url(), '/status')
+            ? Http::response(['success' => true, 'data' => ['worker_version' => '2.9.0', 'plugins_list' => $plugins]])
+            : Http::response(['success' => true, 'verified' => true, 'message' => 'Reinstalado']));
+        Queue::fake();
+
+        $this->actingAs($usuario)->post(route('webminder-panel.sitios.reinstalar-plugins', $this->sitio))->assertRedirect();
+        $e = Ejecucion::sole();
+        $this->assertSame(['akismet/akismet.php'], array_column($e->items, 'item'));
+        $this->assertSame('5.3', $e->items[0]['hasta']);
+        $this->vaciarCola();
+
+        Http::assertSent(fn (Request $req) => str_ends_with($req->url(), '/update') && $req['item'] === 'akismet/akismet.php' && $req['reinstall'] === true);
+        $this->assertSame('ok', $e->refresh()->items[0]['estado']);
+        // Con un lote en marcha no se lanza otro
+        Ejecucion::create(['sitio_id' => $this->sitio->id, 'copia_bd' => false, 'items' => [], 'estado' => 'en_curso']);
+        $this->actingAs($usuario)->post(route('webminder-panel.sitios.reinstalar-plugins', $this->sitio))->assertSessionHas('error');
+    }
+
+    public function test_cerrar_sesiones_y_forzar_contrasena_se_piden_al_worker(): void
+    {
+        $usuario = User::factory()->create();
+        Http::fake(['acme.test/*' => Http::response(['success' => true, 'message' => 'Sesiones cerradas.'])]);
+
+        $this->actingAs($usuario)->post(route('webminder-panel.sitios.sesiones', $this->sitio), ['accion' => 'forzar_clave'])->assertSessionHas('success', 'Sesiones cerradas.');
+        Http::assertSent(fn (Request $req) => str_ends_with($req->url(), '/sesiones') && $req['accion'] === 'forzar_clave');
+        $this->actingAs($usuario)->post(route('webminder-panel.sitios.sesiones', $this->sitio), ['accion' => 'borrar_todo'])->assertSessionHasErrors('accion');
+
+        EstadoSitio::create(['sitio_id' => $this->sitio->id, 'estado' => 'online', 'datos' => ['worker_version' => '2.9.0', 'plugins_list' => [['file' => 'a/a.php', 'name' => 'A', 'version' => '1', 'wporg' => true]]], 'metricas' => [], 'codigo_http' => 200, 'tiempo_respuesta_ms' => 0]);
+        $this->actingAs($usuario)->get(route('webminder-panel.sitios.show', $this->sitio))
+            ->assertSee('Reinstalar todos los plugins gratuitos (1)')->assertSee('Forzar restablecimiento')->assertSee('Desconectar a todos');
     }
 
     public function test_la_pagina_de_una_solicitud_se_ve_con_su_codigo(): void

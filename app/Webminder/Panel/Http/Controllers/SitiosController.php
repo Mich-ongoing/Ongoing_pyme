@@ -2,6 +2,8 @@
 
 namespace App\Webminder\Panel\Http\Controllers;
 
+use App\Webminder\Panel\Jobs\ActualizarSitio;
+use App\Webminder\Panel\Models\Ejecucion;
 use App\Webminder\Panel\Models\SitioWeb;
 use App\Webminder\Panel\Models\Credencial;
 use App\Webminder\Panel\Models\EventoActividad;
@@ -185,6 +187,38 @@ class SitiosController
                 ? "La web aceptó el envío a {$para}. Mira que te llega (y que no está en spam): si llega, los formularios también."
                 : 'La web no pudo enviar el correo: ' . $resultado['error']
         );
+    }
+
+    /** Cierra la sesión de todos los usuarios de la web (y con forzar_clave les exige contraseña nueva). */
+    public function sesiones(Request $request, SitioWeb $sitio): RedirectResponse
+    {
+        $accion = $request->validate(['accion' => ['required', 'in:cerrar,forzar_clave']])['accion'];
+        $resultado = $this->agente->sesiones($sitio, $accion);
+
+        return back()->with($resultado['success'] ? 'success' : 'error', $resultado['success'] ? $resultado['message'] : 'La web no lo aplicó: ' . $resultado['error']);
+    }
+
+    /** Lote que reinstala la misma versión de cada plugin de wordpress.org (copia, comprobación y vuelta atrás como una actualización). */
+    public function reinstalarPlugins(Request $request, SitioWeb $sitio): RedirectResponse
+    {
+        if (Ejecucion::where('sitio_id', $sitio->id)->whereIn('estado', ['pendiente', 'en_curso'])->exists()) {
+            return back()->with('error', 'Ya hay un lote en curso en esta web: espera a que termine.');
+        }
+        $resultado = $this->agente->obtenerStatus($sitio);
+        if (!$resultado['success']) {
+            return back()->with('error', 'No se pudo leer la lista de plugins: ' . $resultado['error']);
+        }
+        $items = collect($resultado['data']['plugins_list'] ?? [])->where('wporg', true)->map(fn ($p) => [
+            'tipo' => 'plugin', 'item' => $p['file'], 'nombre' => $p['name'], 'desde' => $p['version'], 'hasta' => $p['version'],
+            'estado' => 'pendiente', 'mensaje' => null, 'reinstalar' => true,
+        ])->values()->all();
+        if (!$items) {
+            return back()->with('error', 'Esta web no tiene plugins gratuitos de wordpress.org que reinstalar.');
+        }
+        $ejecucion = Ejecucion::create(['sitio_id' => $sitio->id, 'usuario_id' => $request->user()?->id, 'copia_bd' => false, 'items' => $items]);
+        ActualizarSitio::dispatch($ejecucion->id);
+
+        return redirect()->route('webminder-panel.ejecuciones.show', $ejecucion);
     }
 
     public function desconectar(SitioWeb $sitio): RedirectResponse

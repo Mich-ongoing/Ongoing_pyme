@@ -100,10 +100,11 @@ class ActualizarSitio implements ShouldQueue
             $antes = $capturas->capturar($sitio->url);
             $antes2 = $capturas->capturar($sitio->url);
         }
-        $ejecucion->update(['progreso' => "Actualizando {$item['nombre']}…"]);
+        $reinstalar = !empty($item['reinstalar']);
+        $ejecucion->update(['progreso' => ($reinstalar ? 'Reinstalando' : 'Actualizando') . " {$item['nombre']}…"]);
         // keep_backup: el worker guarda 7 días la versión anterior para poder revertir desde aquí
         $r = $this->remoto($ejecucion, fn ($job, $reanudar) => $agente->ejecutarActualizacion(
-            $sitio, $item['tipo'], $item['item'], $visual ? ['keep_backup' => true] : [], $progreso, $job, $reanudar));
+            $sitio, $item['tipo'], $item['item'], ($visual ? ['keep_backup' => true] : []) + ($reinstalar ? ['reinstall' => true] : []), $progreso, $job, $reanudar));
 
         if ($r['success']) {
             $estado = ($r['verified'] ?? true) ? 'ok' : 'ok_sin_verificar';

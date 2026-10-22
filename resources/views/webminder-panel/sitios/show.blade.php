@@ -198,6 +198,53 @@
         </div>
     </flux:card>
 
+    <!-- Acciones de seguridad (tras un hackeo o una sospecha) -->
+    @php
+        $puede_acciones = version_compare($estado_actual?->datos['worker_version'] ?? '0', '2.9.0', '>=');
+        $gratuitos = collect($plugins)->where('wporg', true)->count();
+    @endphp
+    <flux:card class="bg-slate-950/60 border border-slate-800 p-6 rounded-2xl mb-8">
+        <flux:heading size="lg" class="text-slate-100 font-bold mb-4">🚨 Acciones de seguridad</flux:heading>
+        @if(!$puede_acciones)
+            <p class="text-sm text-slate-500">Necesita el worker 2.9 o superior.</p>
+        @else
+            <div class="divide-y divide-slate-800">
+                <div class="flex flex-wrap items-center justify-between gap-4 py-4">
+                    <div class="max-w-2xl">
+                        <h4 class="text-sm font-semibold text-slate-200">Reinstalar todos los plugins gratuitos ({{ $gratuitos }})</h4>
+                        <p class="text-xs text-slate-400 mt-1">Vuelve a instalar la misma versión de cada plugin de wordpress.org con su código original, por si un atacante lo ha modificado. Va como una actualización: copia antes, comprueba la web y vuelve atrás si algo falla. Los plugins de pago no se tocan.</p>
+                    </div>
+                    <form action="{{ route('webminder-panel.sitios.reinstalar-plugins', $sitio) }}" method="POST" class="m-0" onsubmit="return confirm(@js('¿Reinstalar los ' . $gratuitos . ' plugins gratuitos de ' . $sitio->nombre . '?'))">
+                        @csrf
+                        <button type="submit" @disabled(!$gratuitos) class="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">♻️ Reinstalar todo</button>
+                    </form>
+                </div>
+                <div class="flex flex-wrap items-center justify-between gap-4 py-4">
+                    <div class="max-w-2xl">
+                        <h4 class="text-sm font-semibold text-slate-200">Forzar restablecimiento de contraseña</h4>
+                        <p class="text-xs text-slate-400 mt-1">Todos los usuarios tendrán que crear una contraseña nueva al volver a entrar (les llega un enlace por correo). <strong class="text-slate-200">Se desconecta al momento a todos los usuarios conectados.</strong></p>
+                    </div>
+                    <form action="{{ route('webminder-panel.sitios.sesiones', $sitio) }}" method="POST" class="m-0" onsubmit="return confirm(@js('¿Obligar a todos los usuarios de ' . $sitio->nombre . ' a cambiar la contraseña? Se cierran todas las sesiones ahora.'))">
+                        @csrf
+                        <input type="hidden" name="accion" value="forzar_clave">
+                        <button type="submit" class="px-4 py-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 hover:bg-rose-500/20 text-xs font-semibold transition cursor-pointer">🔑 Forzar restablecimiento</button>
+                    </form>
+                </div>
+                <div class="flex flex-wrap items-center justify-between gap-4 py-4">
+                    <div class="max-w-2xl">
+                        <h4 class="text-sm font-semibold text-slate-200">Desconectar a todos los usuarios</h4>
+                        <p class="text-xs text-slate-400 mt-1">Cierra la sesión de todos los usuarios conectados sin pedirles que cambien la contraseña.</p>
+                    </div>
+                    <form action="{{ route('webminder-panel.sitios.sesiones', $sitio) }}" method="POST" class="m-0" onsubmit="return confirm(@js('¿Desconectar a todos los usuarios de ' . $sitio->nombre . '?'))">
+                        @csrf
+                        <input type="hidden" name="accion" value="cerrar">
+                        <button type="submit" class="px-4 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 hover:bg-amber-500/20 text-xs font-semibold transition cursor-pointer">🚪 Desconectar a todos</button>
+                    </form>
+                </div>
+            </div>
+        @endif
+    </flux:card>
+
     <!-- Grid: Admin Users & Environment -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
         <!-- Section 2: Admin Users -->

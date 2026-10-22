@@ -218,6 +218,12 @@ class AgenteComunicacionService
         }
     }
 
+    /** cerrar: saca a todos los usuarios; forzar_clave: además les exige contraseña nueva (worker ≥ 2.9). */
+    public function sesiones(SitioWeb $sitio, string $accion): array
+    {
+        return $this->hacerPeticion($sitio, 'sesiones', ['accion' => $accion]);
+    }
+
     /** Correo de prueba por wp_mail() en la web, el mismo camino que sus formularios (worker ≥ 2.8). */
     public function probarCorreo(SitioWeb $sitio, string $para): array
     {

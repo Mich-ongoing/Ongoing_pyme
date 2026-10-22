@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.8.0
+ * Version:     2.9.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.8.0';
+    const VERSION = '2.9.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -84,6 +84,8 @@ class WebminderAgent {
     const OPTION_BACKUP_DIR = 'ongoing_webminder_backup_dir';
     const OPTION_JOB_PREFIX = 'ongoing_webminder_job_';
     const OPTION_CORREO = 'ongoing_webminder_correo';
+    // Quien no haya cambiado la contraseña después de esta fecha no puede entrar hasta hacerlo
+    const OPTION_CLAVE_DESDE = 'ongoing_webminder_clave_desde';
 
     private $via_correo = null;
 
@@ -142,6 +144,43 @@ class WebminderAgent {
         add_action('wp_mail_failed', function ($error) {
             $this->anotar_correo(false, $error->get_error_message());
         });
+
+        // «Forzar restablecimiento de contraseña» desde el panel (después de comprobar la contraseña)
+        add_filter('authenticate', [$this, 'exigir_clave_nueva'], 999);
+        add_action('after_password_reset', [$this, 'anotar_clave_nueva']);
+        add_action('wp_set_password', function ($password, $user_id, $antes = null) {
+            // Al entrar, WordPress 6.8+ vuelve a cifrar la MISMA contraseña: eso no es cambiarla
+            if (isset($antes->user_pass) && wp_check_password($password, $antes->user_pass, $user_id)) {
+                return;
+            }
+            $this->anotar_clave_nueva($user_id);
+        }, 10, 3);
+        add_action('profile_update', function ($user_id, $antes) {
+            $ahora = get_userdata($user_id);
+            if ($ahora && isset($antes->user_pass) && $ahora->user_pass !== $antes->user_pass) {
+                $this->anotar_clave_nueva($user_id);
+            }
+        }, 10, 2);
+    }
+
+    public function anotar_clave_nueva($user) {
+        update_user_meta(is_object($user) ? $user->ID : (int) $user, 'webminder_clave_cambiada', time());
+    }
+
+    public function exigir_clave_nueva($user) {
+        $desde = (int) get_option(self::OPTION_CLAVE_DESDE);
+        if (!$desde || !($user instanceof \WP_User) || (int) get_user_meta($user->ID, 'webminder_clave_cambiada', true) >= $desde) {
+            return $user;
+        }
+        // Un correo cada 15 min como mucho por usuario, aunque reintente
+        $enviado = (bool) get_transient('webminder_clave_aviso_' . $user->ID);
+        if (!$enviado && function_exists('retrieve_password')) {
+            $enviado = retrieve_password($user->user_login) === true;
+            $enviado && set_transient('webminder_clave_aviso_' . $user->ID, 1, 15 * MINUTE_IN_SECONDS);
+        }
+        return new \WP_Error('webminder_clave_nueva', $enviado
+            ? '<strong>Por seguridad tienes que crear una contraseña nueva.</strong> Te hemos enviado a tu correo un enlace para hacerlo.'
+            : '<strong>Por seguridad tienes que crear una contraseña nueva.</strong> Usa «¿Has olvidado tu contraseña?» para recibir el enlace.');
     }
 
     private function anotar_correo($ok, $error = '') {
@@ -557,6 +596,12 @@ class WebminderAgent {
         register_rest_route(self::API_NAMESPACE, '/localizar', [
             'methods'             => 'POST',
             'callback'            => [$this, 'handle_localizar'],
+            'permission_callback' => [$this, 'verify_signature']
+        ]);
+
+        register_rest_route(self::API_NAMESPACE, '/sesiones', [
+            'methods'             => 'POST',
+            'callback'            => [$this, 'handle_sesiones'],
             'permission_callback' => [$this, 'verify_signature']
         ]);
 
@@ -1013,6 +1058,25 @@ class WebminderAgent {
      * Dónde aparece un dominio en la web: base de datos, archivos y la portada tal como
      * sale ahora. Para los avisos de «script externo nuevo» del panel. Solo lee.
      */
+    /** Cierra la sesión de todos los usuarios y, con forzar_clave, les exige una contraseña nueva al volver. */
+    public function handle_sesiones(\WP_REST_Request $request) {
+        $accion = $request->get_json_params()['accion'] ?? '';
+        if (!in_array($accion, ['cerrar', 'forzar_clave'], true)) {
+            return new \WP_Error('accion', 'Acción no válida.', ['status' => 400]);
+        }
+        if ($accion === 'forzar_clave') {
+            update_option(self::OPTION_CLAVE_DESDE, time(), false);
+        }
+        \WP_Session_Tokens::destroy_all_for_all_users();
+
+        return rest_ensure_response([
+            'success' => true,
+            'message' => $accion === 'forzar_clave'
+                ? 'Sesiones cerradas. Cada usuario tendrá que crear una contraseña nueva la próxima vez que entre.'
+                : 'Sesiones cerradas: todos los usuarios tendrán que volver a entrar.',
+        ]);
+    }
+
     /** Manda un correo de prueba por wp_mail (el mismo camino que los formularios). */
     public function handle_probar_correo(\WP_REST_Request $request) {
         $para = sanitize_email((string) ($request->get_json_params()['para'] ?? ''));
@@ -1916,9 +1980,23 @@ class WebminderAgent {
                 'active' => in_array($file, $active_plugins, true),
                 'update_available' => $has_update,
                 'new_version' => $new_version,
+                'wporg' => $this->wporg_slug($file, $update_plugins) !== null, // reinstalable desde wordpress.org
             ];
         }
         return $result;
+    }
+
+    /**
+     * Slug en wordpress.org si wordpress.org reconoce el plugin como suyo (el mismo
+     * criterio de WordPress al buscar actualizaciones: id «w.org/plugins/<slug>»).
+     * Un plugin de pago o propio con el mismo nombre de carpeta no pasa.
+     */
+    private function wporg_slug($item, $updates = null) {
+        $updates = $updates ?: get_site_transient('update_plugins');
+        $entry = $updates->response[$item] ?? ($updates->no_update[$item] ?? null);
+        $entry = $entry ? (object) $entry : null;
+        $slug = $entry->slug ?? '';
+        return ($slug !== '' && ($entry->id ?? '') === 'w.org/plugins/' . $slug) ? $slug : null;
     }
 
     /**
@@ -2495,6 +2573,13 @@ class WebminderAgent {
                 ob_end_clean();
                 return new \WP_Error('unknown_item', 'Ese plugin o tema no está instalado en el sitio.', ['status' => 404]);
             }
+            // Reinstalar: la MISMA versión desde wordpress.org, por si el código del plugin se ha manipulado
+            $reinstall = !empty($params['reinstall']);
+            $wporg_slug = $type === 'plugin' ? $this->wporg_slug($item) : null;
+            if ($reinstall && !$wporg_slug) {
+                ob_end_clean();
+                return rest_ensure_response(['success' => false, 'message' => 'No es un plugin gratuito de wordpress.org: no se puede reinstalar desde allí.']);
+            }
             if (!$this->acquire_update_lock()) {
                 ob_end_clean();
                 return new \WP_Error('busy', 'Ya hay otra actualización en curso en este sitio. Reintenta en unos minutos.', ['status' => 409]);
@@ -2567,7 +2652,19 @@ class WebminderAgent {
             // transient en este instante, lo reinyectamos con un re-chequeo real
             // que PRESERVA los premium. Así cada ítem se actualiza aunque el
             // transient se haya vaciado tras el ítem anterior.
-            $this->ensure_pending_update_present($type, $item);
+            if ($reinstall) {
+                // El actualizador toma el paquete del transient: el zip de la versión instalada, y luego se deja como estaba
+                $updates = get_site_transient('update_plugins');
+                $pending = $updates->response[$item] ?? null;
+                $version = get_plugins()[$item]['Version'] ?? '';
+                $updates->response[$item] = (object) [
+                    'slug' => $wporg_slug, 'plugin' => $item, 'new_version' => $version,
+                    'package' => 'https://downloads.wordpress.org/plugin/' . $wporg_slug . '.' . $version . '.zip',
+                ];
+                set_site_transient('update_plugins', $updates);
+            } else {
+                $this->ensure_pending_update_present($type, $item);
+            }
 
             $was_active = false;
             $was_network_active = false;
@@ -2586,6 +2683,15 @@ class WebminderAgent {
                 // falla con "The plugin is at the latest version.". Lo evitamos
                 // y, en éxito, retiramos el ítem a mano (forget_pending_update).
                 $result = $upgrader->upgrade($item, ['clear_update_cache' => false]);
+                if ($reinstall) {
+                    $updates = get_site_transient('update_plugins');
+                    if ($pending) {
+                        $updates->response[$item] = $pending;
+                    } else {
+                        unset($updates->response[$item]);
+                    }
+                    set_site_transient('update_plugins', $updates);
+                }
 
                 // La ruta puede cambiar: un plugin de un solo archivo (hello.php)
                 // se instala en una carpeta (hello-dolly/hello.php).
@@ -2627,7 +2733,7 @@ class WebminderAgent {
                 // de actualización (no específica de ningún plugin): cubre
                 // cualquier plugin premium sin licencia activa y los plugins
                 // "GPL nulled" sin un servidor de updates válido.
-                $requires_license = $this->is_license_failure($type, $item, $message);
+                $requires_license = !$reinstall && $this->is_license_failure($type, $item, $message);
                 if ($requires_license) {
                     $message = 'Requiere licencia activa o no tiene un paquete de actualización válido '
                         . '(posible plugin premium sin licencia o GPL nulled). Detalle: ' . $message;
@@ -2635,7 +2741,9 @@ class WebminderAgent {
 
                 // Persistir la razón del fallo para mostrarla en el panel
                 // aunque se recargue (se limpia al actualizarse con éxito).
-                $this->record_update_failure($item, $requires_license, $message);
+                if (!$reinstall) {
+                    $this->record_update_failure($item, $requires_license, $message);
+                }
 
                 ob_end_clean();
                 return rest_ensure_response([
@@ -2716,8 +2824,10 @@ class WebminderAgent {
             // Éxito real: retirar el ítem del transient SIN reconstruirlo (no
             // usar wp_clean_*_cache, que en REST tira las updates premium del
             // resto del lote) y limpiar cualquier fallo previo persistido.
-            $this->forget_pending_update($type, $item);
-            $this->clear_update_failure($item);
+            if (!$reinstall) {
+                $this->forget_pending_update($type, $item);
+                $this->clear_update_failure($item);
+            }
 
             // Purga defensiva de cachés de página/objeto/opcode ANTES de cerrar el
             // buffer, para que cualquier salida que suelte un plugin de caché quede
@@ -2728,7 +2838,7 @@ class WebminderAgent {
 
             return rest_ensure_response([
                 'success'  => true,
-                'message'  => ucfirst($type) . ' actualizado correctamente.',
+                'message'  => $reinstall ? 'Reinstalado desde wordpress.org (misma versión, código original).' : ucfirst($type) . ' actualizado correctamente.',
                 'verified' => $verified, // false = ninguna sonda respondía antes: no se pudo comprobar
                 'purged'   => $purged_caches,
                 'item'     => $new_item,
