@@ -205,6 +205,7 @@
     @php
         $puede_acciones = version_compare($estado_actual?->datos['worker_version'] ?? '0', '2.9.0', '>=');
         $gratuitos = collect($plugins)->where('wporg', true)->count();
+        $temas_gratuitos = collect($estado_actual?->datos['themes'] ?? [])->where('wporg', true)->count();
     @endphp
     <flux:card class="bg-slate-950/60 border border-slate-800 p-6 rounded-2xl mb-8">
         <flux:heading size="lg" class="text-slate-100 font-bold mb-4">🚨 Acciones de seguridad</flux:heading>
@@ -222,6 +223,19 @@
                         <button type="submit" @disabled(!$gratuitos) class="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">♻️ Reinstalar todo</button>
                     </form>
                 </div>
+                @if(version_compare($estado_actual?->datos['worker_version'] ?? '0', '2.11.0', '>='))
+                    <div class="flex flex-wrap items-center justify-between gap-4 py-4">
+                        <div class="max-w-2xl">
+                            <h4 class="text-sm font-semibold text-slate-200">Reinstalar los temas gratuitos ({{ $temas_gratuitos }})</h4>
+                            <p class="text-xs text-slate-400 mt-1">Lo mismo para los temas de wordpress.org: misma versión con el código original, con copia y vuelta atrás si la web falla. Los temas de pago y los temas hijo no se tocan (lo que hayas cambiado en un tema gratuito sin tema hijo se pierde).</p>
+                        </div>
+                        <form action="{{ route('webminder-panel.sitios.reinstalar-plugins', $sitio) }}" method="POST" class="m-0" onsubmit="return confirm(@js('¿Reinstalar los ' . $temas_gratuitos . ' temas gratuitos de ' . $sitio->nombre . '?'))">
+                            @csrf
+                            <input type="hidden" name="tipo" value="theme">
+                            <button type="submit" @disabled(!$temas_gratuitos) class="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">♻️ Reinstalar temas</button>
+                        </form>
+                    </div>
+                @endif
                 <div class="flex flex-wrap items-center justify-between gap-4 py-4">
                     <div class="max-w-2xl">
                         <h4 class="text-sm font-semibold text-slate-200">Forzar restablecimiento de contraseña</h4>

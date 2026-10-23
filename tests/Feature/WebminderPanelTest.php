@@ -782,6 +782,28 @@ class WebminderPanelTest extends TestCase
         $this->actingAs($usuario)->post(route('webminder-panel.sitios.reinstalar-plugins', $this->sitio))->assertSessionHas('error');
     }
 
+    public function test_reinstalar_temas_lanza_un_lote_solo_con_los_temas_de_wordpress_org(): void
+    {
+        $usuario = User::factory()->create();
+        $temas = [
+            ['slug' => 'astra', 'name' => 'Astra', 'version' => '4.8', 'wporg' => true],
+            ['slug' => 'astra-child', 'name' => 'Astra Child', 'version' => '1.0', 'wporg' => false],
+        ];
+        Http::fake(fn (Request $req) => str_ends_with($req->url(), '/status')
+            ? Http::response(['success' => true, 'data' => ['worker_version' => '2.11.0', 'themes' => $temas]])
+            : Http::response(['success' => true, 'verified' => true, 'message' => 'Reinstalado']));
+        Queue::fake();
+
+        $this->actingAs($usuario)->post(route('webminder-panel.sitios.reinstalar-plugins', $this->sitio), ['tipo' => 'theme'])->assertRedirect();
+        $this->assertSame([['theme', 'astra', '4.8']], array_map(fn ($i) => [$i['tipo'], $i['item'], $i['hasta']], Ejecucion::sole()->items));
+        $this->vaciarCola();
+        Http::assertSent(fn (Request $req) => str_ends_with($req->url(), '/update') && $req['type'] === 'theme' && $req['item'] === 'astra' && $req['reinstall'] === true);
+        $this->actingAs($usuario)->post(route('webminder-panel.sitios.reinstalar-plugins', $this->sitio), ['tipo' => 'core'])->assertSessionHasErrors('tipo');
+
+        EstadoSitio::create(['sitio_id' => $this->sitio->id, 'estado' => 'online', 'datos' => ['worker_version' => '2.11.0', 'themes' => $temas], 'metricas' => [], 'codigo_http' => 200, 'tiempo_respuesta_ms' => 0]);
+        $this->actingAs($usuario)->get(route('webminder-panel.sitios.show', $this->sitio))->assertSee('Reinstalar los temas gratuitos (1)');
+    }
+
     public function test_la_lista_busca_y_los_sitios_se_editan_y_eliminan(): void
     {
         $usuario = User::factory()->create();

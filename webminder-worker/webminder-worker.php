@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.10.0
+ * Version:     2.11.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.10.0';
+    const VERSION = '2.11.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -2048,6 +2048,17 @@ class WebminderAgent {
     }
 
     /**
+     * Lo mismo para temas: el transient update_themes no trae id, así que vale que
+     * WordPress lo descargue de downloads.wordpress.org (un tema de pago trae su propio paquete).
+     */
+    private function wporg_theme_slug($item, $updates = null) {
+        $updates = $updates ?: get_site_transient('update_themes');
+        $entry = $updates->response[$item] ?? ($updates->no_update[$item] ?? null);
+        $package = is_array($entry) ? ($entry['package'] ?? '') : (is_object($entry) ? ($entry->package ?? '') : '');
+        return (is_string($package) && strpos($package, 'https://downloads.wordpress.org/theme/' . $item . '.') === 0) ? $item : null;
+    }
+
+    /**
      * Información del entorno del servidor y base de datos.
      */
     private function get_environment_info() {
@@ -2103,6 +2114,7 @@ class WebminderAgent {
                     'parent_theme'     => ($parent instanceof \WP_Theme) ? ($parent->get('Name') ?: $parent->get_stylesheet()) : null,
                     'requires_php'     => $theme->get('RequiresPHP') ?: '',
                     'requires_wp'      => $theme->get('RequiresWP') ?: '',
+                    'wporg'            => $this->wporg_theme_slug((string) $slug, $update_themes) !== null,
                     'package'          => (isset($update_map[$slug]['package']) && is_string($update_map[$slug]['package'])) ? $update_map[$slug]['package'] : null,
                 ];
             }
@@ -2621,12 +2633,12 @@ class WebminderAgent {
                 ob_end_clean();
                 return new \WP_Error('unknown_item', 'Ese plugin o tema no está instalado en el sitio.', ['status' => 404]);
             }
-            // Reinstalar: la MISMA versión desde wordpress.org, por si el código del plugin se ha manipulado
+            // Reinstalar: la MISMA versión desde wordpress.org, por si el código del plugin o tema se ha manipulado
             $reinstall = !empty($params['reinstall']);
-            $wporg_slug = $type === 'plugin' ? $this->wporg_slug($item) : null;
+            $wporg_slug = $type === 'plugin' ? $this->wporg_slug($item) : $this->wporg_theme_slug($item);
             if ($reinstall && !$wporg_slug) {
                 ob_end_clean();
-                return rest_ensure_response(['success' => false, 'message' => 'No es un plugin gratuito de wordpress.org: no se puede reinstalar desde allí.']);
+                return rest_ensure_response(['success' => false, 'message' => ($type === 'plugin' ? 'No es un plugin gratuito' : 'No es un tema gratuito') . ' de wordpress.org: no se puede reinstalar desde allí.']);
             }
             if (!$this->acquire_update_lock()) {
                 ob_end_clean();
@@ -2700,7 +2712,17 @@ class WebminderAgent {
             // transient en este instante, lo reinyectamos con un re-chequeo real
             // que PRESERVA los premium. Así cada ítem se actualiza aunque el
             // transient se haya vaciado tras el ítem anterior.
-            if ($reinstall) {
+            if ($reinstall && $type === 'theme') {
+                // Igual que con los plugins (abajo), pero update_themes guarda arrays
+                $updates = get_site_transient('update_themes');
+                $pending = $updates->response[$item] ?? null;
+                $version = wp_get_theme($item)->get('Version');
+                $updates->response[$item] = [
+                    'theme' => $item, 'new_version' => $version, 'url' => 'https://wordpress.org/themes/' . $item . '/',
+                    'package' => 'https://downloads.wordpress.org/theme/' . $item . '.' . $version . '.zip',
+                ];
+                set_site_transient('update_themes', $updates);
+            } elseif ($reinstall) {
                 // El actualizador toma el paquete del transient: el zip de la versión instalada, y luego se deja como estaba
                 $updates = get_site_transient('update_plugins');
                 $pending = $updates->response[$item] ?? null;
@@ -2753,6 +2775,15 @@ class WebminderAgent {
             } else {
                 $upgrader = new \Theme_Upgrader($upgrader_skin);
                 $result = $upgrader->upgrade($item, ['clear_update_cache' => false]);
+                if ($reinstall) {
+                    $updates = get_site_transient('update_themes');
+                    if ($pending) {
+                        $updates->response[$item] = $pending;
+                    } else {
+                        unset($updates->response[$item]);
+                    }
+                    set_site_transient('update_themes', $updates);
+                }
             }
 
             // El actualizador nativo devuelve TRUE solo en éxito. Cualquier

@@ -242,22 +242,25 @@ class SitiosController
         return back()->with($resultado['success'] ? 'success' : 'error', $resultado['success'] ? $resultado['message'] : 'La web no lo aplicó: ' . $resultado['error']);
     }
 
-    /** Lote que reinstala la misma versión de cada plugin de wordpress.org (copia, comprobación y vuelta atrás como una actualización). */
+    /** Lote que reinstala la misma versión de cada plugin o tema de wordpress.org (copia, comprobación y vuelta atrás como una actualización). */
     public function reinstalarPlugins(Request $request, SitioWeb $sitio): RedirectResponse
     {
+        $tipo = $request->validate(['tipo' => ['nullable', 'in:plugin,theme']])['tipo'] ?? 'plugin';
+        $que = $tipo === 'plugin' ? 'plugins' : 'temas';
         if (Ejecucion::where('sitio_id', $sitio->id)->whereIn('estado', ['pendiente', 'en_curso'])->exists()) {
             return back()->with('error', 'Ya hay un lote en curso en esta web: espera a que termine.');
         }
         $resultado = $this->agente->obtenerStatus($sitio);
         if (!$resultado['success']) {
-            return back()->with('error', 'No se pudo leer la lista de plugins: ' . $resultado['error']);
+            return back()->with('error', "No se pudo leer la lista de {$que}: " . $resultado['error']);
         }
-        $items = collect($resultado['data']['plugins_list'] ?? [])->where('wporg', true)->map(fn ($p) => [
-            'tipo' => 'plugin', 'item' => $p['file'], 'nombre' => $p['name'], 'desde' => $p['version'], 'hasta' => $p['version'],
+        $lista = $resultado['data'][$tipo === 'plugin' ? 'plugins_list' : 'themes'] ?? [];
+        $items = collect($lista)->where('wporg', true)->map(fn ($p) => [
+            'tipo' => $tipo, 'item' => $p[$tipo === 'plugin' ? 'file' : 'slug'], 'nombre' => $p['name'], 'desde' => $p['version'], 'hasta' => $p['version'],
             'estado' => 'pendiente', 'mensaje' => null, 'reinstalar' => true,
         ])->values()->all();
         if (!$items) {
-            return back()->with('error', 'Esta web no tiene plugins gratuitos de wordpress.org que reinstalar.');
+            return back()->with('error', "Esta web no tiene {$que} gratuitos de wordpress.org que reinstalar.");
         }
         $ejecucion = Ejecucion::create(['sitio_id' => $sitio->id, 'usuario_id' => $request->user()?->id, 'copia_bd' => false, 'items' => $items]);
         ActualizarSitio::dispatch($ejecucion->id);
