@@ -11,6 +11,14 @@
     </div>
 
     <flux:card class="bg-slate-950/60 border border-slate-800 p-6 rounded-2xl">
+        <form method="GET" action="{{ route('webminder-panel.sitios.index') }}" class="flex gap-2 mb-4" role="search">
+            <label for="buscar-sitio" class="sr-only">Buscar sitio</label>
+            <input id="buscar-sitio" type="search" name="q" value="{{ $q }}" placeholder="Buscar por nombre, dominio o cliente…" class="flex-1 px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-100 text-sm placeholder-slate-500 focus:border-indigo-500 focus:outline-none">
+            <button type="submit" class="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition cursor-pointer">Buscar</button>
+            @if($q !== '')
+                <a href="{{ route('webminder-panel.sitios.index') }}" class="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition">Quitar filtro</a>
+            @endif
+        </form>
         <div class="overflow-x-auto">
             <table class="w-full text-left text-sm text-slate-300">
                 <thead class="bg-slate-900/80 text-xs uppercase tracking-wider text-slate-400 border-b border-slate-800">
@@ -77,15 +85,25 @@
                                     </span>
                                 @endif
                             </td>
-                            <td class="py-3.5 px-4 text-right">
+                            <td class="py-3.5 px-4 text-right whitespace-nowrap">
                                 <a href="/webminder-panel/sitios/{{ $sitio->id }}" class="inline-flex items-center px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-medium text-slate-200 transition">
                                     Ver Detalles →
                                 </a>
+                                <a href="{{ route('webminder-panel.sitios.edit', $sitio) }}" class="inline-flex items-center px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-medium text-slate-200 transition">
+                                    Editar
+                                </a>
+                                <form action="{{ route('webminder-panel.sitios.destroy', $sitio) }}" method="POST" class="inline m-0" onsubmit="return confirm(@js('¿Eliminar ' . $sitio->nombre . ' (' . $sitio->url . ') del panel? Se borran también su historial, lotes y credenciales. La web no se toca.'))">
+                                    @csrf
+                                    @method('DELETE')
+                                    <button type="submit" class="inline-flex items-center px-3 py-1.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 hover:bg-rose-500/20 text-xs font-medium transition cursor-pointer">
+                                        Eliminar
+                                    </button>
+                                </form>
                             </td>
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="7" class="py-8 text-center text-slate-500">No hay sitios registrados aún.</td>
+                            <td colspan="7" class="py-8 text-center text-slate-500">{{ $q !== '' ? 'Ningún sitio coincide con «' . $q . '».' : 'No hay sitios registrados aún.' }}</td>
                         </tr>
                     @endforelse
                 </tbody>

@@ -26,11 +26,17 @@ class SitiosController
     /**
      * Listar sitios web
      */
-    public function index(): View
+    public function index(Request $request): View
     {
+        $q = trim((string) $request->query('q'));
         $sitios = SitioWeb::with('cliente')
+            ->when($q !== '', fn ($consulta) => $consulta->where(fn ($w) => $w
+                ->where('nombre', 'like', "%{$q}%")
+                ->orWhere('url', 'like', "%{$q}%")
+                ->orWhereHas('cliente', fn ($c) => $c->where('nombre', 'like', "%{$q}%"))))
             ->latest()
-            ->paginate(20);
+            ->paginate(20)
+            ->withQueryString();
 
         $estadisticas = [
             'online' => SitioWeb::where('estado', 'online')->count(),
@@ -41,6 +47,7 @@ class SitiosController
         return view('webminder-panel::sitios.index', [
             'sitios' => $sitios,
             'estadisticas' => $estadisticas,
+            'q' => $q,
         ]);
     }
 
@@ -101,6 +108,43 @@ class SitiosController
 
         return redirect()->route('webminder-panel.sitios.show', $sitio)
             ->with('success', 'Sitio creado. Credenciales generadas automáticamente.');
+    }
+
+    public function edit(SitioWeb $sitio): View
+    {
+        return view('webminder-panel::sitios.create', [
+            'clientes' => Cliente::where('activo', true)->orWhere('id', $sitio->cliente_id)->get(),
+            'sitio' => $sitio,
+        ]);
+    }
+
+    public function update(Request $request, SitioWeb $sitio): RedirectResponse
+    {
+        $validado = $request->validate([
+            'cliente_id' => 'required|exists:panel_clientes,id',
+            'nombre' => 'required|string|max:255',
+            'url' => 'required|url|unique:panel_sitios_web,url,' . $sitio->id,
+            'descripcion' => 'nullable|string',
+            'tecnologia' => 'nullable|string',
+        ]);
+
+        $sitio->fill($validado);
+        // Con otra URL el estado guardado era de la web equivocada
+        if ($sitio->isDirty('url')) {
+            $sitio->estado = 'sin_verificar';
+            $sitio->caida_desde = null;
+        }
+        $sitio->save();
+
+        return redirect()->route('webminder-panel.sitios.show', $sitio)->with('success', 'Sitio actualizado.');
+    }
+
+    public function destroy(SitioWeb $sitio): RedirectResponse
+    {
+        $nombre = $sitio->nombre;
+        $sitio->delete();
+
+        return redirect()->route('webminder-panel.sitios.index')->with('success', "Sitio «{$nombre}» eliminado del panel.");
     }
 
     /**

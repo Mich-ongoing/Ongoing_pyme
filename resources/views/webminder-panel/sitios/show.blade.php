@@ -66,6 +66,9 @@
                 <a href="/webminder-panel/sitios/{{ $sitio->id }}/credenciales" class="inline-flex items-center px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition">
                     🔑 Credenciales API
                 </a>
+                <a href="{{ route('webminder-panel.sitios.edit', $sitio) }}" class="inline-flex items-center px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition">
+                    ✏️ Editar
+                </a>
             </div>
         </div>
     </flux:card>

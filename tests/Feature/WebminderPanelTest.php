@@ -782,6 +782,28 @@ class WebminderPanelTest extends TestCase
         $this->actingAs($usuario)->post(route('webminder-panel.sitios.reinstalar-plugins', $this->sitio))->assertSessionHas('error');
     }
 
+    public function test_la_lista_busca_y_los_sitios_se_editan_y_eliminan(): void
+    {
+        $usuario = User::factory()->create();
+        $otro = SitioWeb::create(['cliente_id' => $this->sitio->cliente_id, 'nombre' => 'Delvy', 'url' => 'https://delvy.test/', 'activo' => true, 'estado' => 'sin_verificar']);
+
+        $this->actingAs($usuario)->get(route('webminder-panel.sitios.index', ['q' => 'delvy']))->assertOk()->assertSee('delvy.test')->assertDontSee('acme.test');
+        $this->actingAs($usuario)->get(route('webminder-panel.sitios.index', ['q' => 'Ana']))->assertSee('delvy.test')->assertSee('acme.test');
+        $this->actingAs($usuario)->get(route('webminder-panel.sitios.edit', $this->sitio))->assertOk()->assertSee('https://acme.test/');
+
+        $this->sitio->update(['estado' => 'offline', 'caida_desde' => now()]);
+        $datos = ['cliente_id' => $this->sitio->cliente_id, 'nombre' => 'ACME bien', 'url' => 'https://acme-bien.test/', 'tecnologia' => 'WordPress'];
+        $this->actingAs($usuario)->put(route('webminder-panel.sitios.update', $this->sitio), [...$datos, 'url' => 'https://delvy.test/'])->assertSessionHasErrors('url');
+        $this->actingAs($usuario)->put(route('webminder-panel.sitios.update', $this->sitio), $datos)->assertRedirect(route('webminder-panel.sitios.show', $this->sitio));
+        $this->sitio->refresh();
+        $this->assertSame(['ACME bien', 'https://acme-bien.test/', 'sin_verificar', null], [$this->sitio->nombre, $this->sitio->url, $this->sitio->estado, $this->sitio->caida_desde]);
+        $this->assertNotNull($this->sitio->credencial, 'editar no toca las credenciales');
+
+        $this->actingAs($usuario)->delete(route('webminder-panel.sitios.destroy', $otro))->assertRedirect(route('webminder-panel.sitios.index'));
+        $this->assertNull(SitioWeb::find($otro->id));
+        $this->assertNotNull(SitioWeb::find($this->sitio->id));
+    }
+
     public function test_cerrar_sesiones_y_forzar_contrasena_se_piden_al_worker(): void
     {
         $usuario = User::factory()->create();
