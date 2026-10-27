@@ -554,6 +554,10 @@ class WebminderPanelTest extends TestCase
         $this->assertStringContainsString('WordPress 6.8 → 6.9: actualizado', $informe->getTextBody());
         $this->assertStringContainsString('Traducciones (3 paquetes): actualizado', $informe->getTextBody());
         $this->assertStringContainsString('ACME: con errores (copias en el sitio: 1.5 MB)', $informe->getTextBody());
+        $html = $informe->getHtmlBody();
+        $this->assertStringContainsString('Necesitan atención', $html);
+        $this->assertStringContainsString('falló y se revirtió', $html);
+        $this->assertStringContainsString('HTTP 500', $html);
     }
 
     public function test_si_el_proceso_muere_a_mitad_se_retoma_el_trabajo_del_sitio(): void

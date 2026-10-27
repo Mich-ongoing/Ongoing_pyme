@@ -87,13 +87,15 @@ class RondaNocturna
     public function informe(string $ronda): void
     {
         $lotes = Ejecucion::with('sitio')->where('ronda', $ronda)->get()->keyBy('sitio_id');
-        $lineas = SitioWeb::where('activo', true)->whereNotNull('caida_desde')->get()
-            ->map(fn ($s) => "🔴 {$s->nombre} sigue caída desde las " . AvisosService::hora($s->caida_desde))->all();
+        $caidas = SitioWeb::where('activo', true)->whereNotNull('caida_desde')->get();
+        $lineas = $caidas->map(fn ($s) => "🔴 {$s->nombre} sigue caída desde las " . AvisosService::hora($s->caida_desde))->all();
 
         $copias = Cache::get("watchwp-copias-{$ronda}", []);
+        $filas = [];
 
         foreach ($this->sitios() as $sitio) {
             $e = $lotes->get($sitio->id);
+            $filas[] = ['sitio' => $sitio, 'e' => $e, 'mb' => isset($copias[$sitio->id]) ? round($copias[$sitio->id] / 1048576, 1) : null];
             $ocupan = isset($copias[$sitio->id]) ? ' (copias en el sitio: ' . round($copias[$sitio->id] / 1048576, 1) . ' MB)' : '';
             if (!$e) {
                 $lineas[] = "✔ {$sitio->nombre}: todo al día{$ocupan}";
@@ -108,7 +110,8 @@ class RondaNocturna
             $lineas[] = $bloque . ($e->items ? "\n    " . route('webminder-panel.ejecuciones.show', $e) : '');
         }
 
-        AvisosService::enviar('Informe de mantenimiento ' . substr($ronda, 0, 10), implode("\n\n", $lineas) ?: 'No hay sitios vinculados.');
+        AvisosService::enviar('Informe de mantenimiento ' . substr($ronda, 0, 10), implode("\n\n", $lineas) ?: 'No hay sitios vinculados.',
+            view('webminder-panel.correos.informe', ['ronda' => $ronda, 'caidas' => $caidas, 'filas' => collect($filas), 'estados' => self::ESTADOS])->render());
     }
 
     private function sitios()

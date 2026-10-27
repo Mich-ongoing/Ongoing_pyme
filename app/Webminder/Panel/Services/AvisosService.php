@@ -8,7 +8,8 @@ use Illuminate\Support\Facades\Mail;
 /** Correos de watchWP: caídas, lotes cortados e informe nocturno. */
 class AvisosService
 {
-    public static function enviar(string $asunto, string $texto): void
+    /** $html opcional: el texto va igual como alternativa para clientes sin HTML. */
+    public static function enviar(string $asunto, string $texto, ?string $html = null): void
     {
         $para = config('services.avisos.email');
         if (!$para) {
@@ -17,7 +18,12 @@ class AvisosService
             return;
         }
         try {
-            Mail::raw($texto, fn ($m) => $m->to($para)->subject("watchWP · {$asunto}"));
+            Mail::raw($texto, function ($m) use ($para, $asunto, $html) {
+                $m->to($para)->subject("watchWP · {$asunto}");
+                if ($html) {
+                    $m->html($html);
+                }
+            });
         } catch (\Throwable $e) {
             // Un correo que falla no debe cortar la vigilancia ni las actualizaciones
             Log::error("watchWP: no se pudo enviar «{$asunto}»: {$e->getMessage()}");
