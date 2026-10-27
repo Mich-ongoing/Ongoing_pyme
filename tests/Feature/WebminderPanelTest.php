@@ -503,6 +503,7 @@ class WebminderPanelTest extends TestCase
         $this->assertNull($this->sitio->refresh()->caida_desde);
         $asuntos = array_map(fn ($c) => $c->getSubject(), $this->correos());
         $this->assertSame(['watchWP · 🔴 ACME está caída', 'watchWP · 🟢 ACME vuelve a funcionar'], $asuntos);
+        $this->assertStringContainsString('ACME está caída</div>', $this->correos()[0]->getHtmlBody());
         Http::assertSent(fn (Request $req) => str_contains($req->url(), 'watchwp='));
     }
 

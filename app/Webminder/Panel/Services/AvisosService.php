@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Mail;
 /** Correos de watchWP: caídas, lotes cortados e informe nocturno. */
 class AvisosService
 {
-    /** $html opcional: el texto va igual como alternativa para clientes sin HTML. */
+    /** Sin $html se maqueta el texto con la plantilla de aviso; el texto va siempre como alternativa. */
     public static function enviar(string $asunto, string $texto, ?string $html = null): void
     {
         $para = config('services.avisos.email');
@@ -16,6 +16,13 @@ class AvisosService
             Log::warning("watchWP: falta WEBMINDER_AVISOS_EMAIL, no se envía «{$asunto}»");
 
             return;
+        }
+        try {
+            $html ??= view('webminder-panel.correos.aviso', ['asunto' => $asunto, 'texto' => $texto])->render();
+        } catch (\Throwable $e) {
+            // Si falla la maqueta el aviso sale igual, en texto
+            Log::error("watchWP: no se pudo maquetar «{$asunto}»: {$e->getMessage()}");
+            $html = null;
         }
         try {
             Mail::raw($texto, function ($m) use ($para, $asunto, $html) {

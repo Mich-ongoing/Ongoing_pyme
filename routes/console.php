@@ -77,7 +77,9 @@ Artisan::command('webminder:nocturna', function (RondaNocturna $ronda) {
 
 Artisan::command('webminder:probar-correo', function () {
     config(['services.avisos.email' => config('services.avisos.email') ?: throw new RuntimeException('Falta WEBMINDER_AVISOS_EMAIL en el .env')]);
-    \Illuminate\Support\Facades\Mail::raw('Si lees esto, los avisos de watchWP llegan bien.', fn ($m) => $m->to(config('services.avisos.email'))->subject('watchWP · Correo de prueba'));
+    $texto = 'Si lees esto, los avisos de watchWP llegan bien.';
+    \Illuminate\Support\Facades\Mail::raw($texto, fn ($m) => $m->to(config('services.avisos.email'))->subject('watchWP · Correo de prueba')
+        ->html(view('webminder-panel.correos.aviso', ['asunto' => 'Correo de prueba', 'texto' => $texto])->render()));
     $this->info('Enviado a ' . config('services.avisos.email'));
 })->purpose('Manda un correo de prueba (sin capturar errores, para ver qué falla)');
 
