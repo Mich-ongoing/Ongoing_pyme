@@ -44,9 +44,11 @@ class FacturacionController extends Controller
     {
         $datos = $request->validate([
             'mes' => ['required', 'date_format:Y-m'],
-            'sociedades' => ['required', 'array', 'min:1'],
+            'sociedades' => ['required_without:solo', 'array'],
             'sociedades.*' => ['string'],
-        ], ['sociedades.required' => 'Marca al menos una factura.']);
+            'solo' => ['nullable', 'string'], // botón «Crear» de una sola factura
+        ], ['sociedades.required_without' => 'Marca al menos una factura.']);
+        $sociedades = isset($datos['solo']) ? [$datos['solo']] : $datos['sociedades'];
         [$anio, $mes] = $this->mes($datos['mes']);
         $volver = redirect()->route('facturacion.index', ['mes' => $datos['mes']]);
 
@@ -61,7 +63,7 @@ class FacturacionController extends Controller
         try {
             // Se vuelve a leer la hoja: los importes salen de ella, nunca del formulario
             $facturas = FacturasDelMes::preparar(HojaFacturacion::lineas($hoja->filas(), $anio, $mes), $holded->contactosPorNombre(), $anio, $mes);
-            foreach (array_unique($datos['sociedades']) as $sociedad) {
+            foreach (array_unique($sociedades) as $sociedad) {
                 $f = $facturas[$sociedad] ?? null;
                 if (! $f || $f['estado'] !== FacturasDelMes::LISTA) {
                     $fallos[] = "{$sociedad}: ya no está lista para crear.";
@@ -92,6 +94,34 @@ class FacturacionController extends Controller
         $volver->with('success', $creadas === 1 ? 'Se ha creado 1 borrador en Holded.' : "Se han creado {$creadas} borradores en Holded.");
 
         return $fallos ? $volver->with('error', implode("\n", $fallos)) : $volver;
+    }
+
+    /** Guarda (o quita) el contacto de Holded elegido a mano para una sociedad; vale para todos los meses. */
+    public function contacto(Request $request, Holded $holded): RedirectResponse
+    {
+        $datos = $request->validate([
+            'mes' => ['required', 'date_format:Y-m'],
+            'sociedad' => ['required_without:quitar', 'string'],
+            'quitar' => ['nullable', 'string'],
+            'contacto' => ['nullable', 'array'],
+        ]);
+        $volver = redirect()->route('facturacion.index', ['mes' => $datos['mes']]);
+
+        if (isset($datos['quitar'])) {
+            ContactoFactura::where('sociedad', $datos['quitar'])->delete();
+
+            return $volver;
+        }
+        $sociedad = $datos['sociedad'];
+        $id = $datos['contacto'][$sociedad] ?? null;
+        // El id viene del formulario: solo se acepta si es un contacto que existe en Holded
+        $existe = $id && collect($holded->contactosPorNombre())->contains(fn ($ids) => isset($ids[$id]));
+        if (! $existe) {
+            return $volver->with('error', "{$sociedad}: elige uno de los contactos.");
+        }
+        ContactoFactura::updateOrCreate(['sociedad' => $sociedad], ['holded_id' => $id]);
+
+        return $volver->with('success', "{$sociedad}: contacto guardado. Se usará también los próximos meses.");
     }
 
     /** «2026-11» → [2026, 11]; sin mes, el actual. */

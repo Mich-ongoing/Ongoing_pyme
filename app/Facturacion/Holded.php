@@ -23,7 +23,10 @@ class Holded
         return Http::withToken($clave)->acceptJson()->timeout(30)->retry(2, 1000, throw: false);
     }
 
-    /** Contactos por nombre normalizado (nombre fiscal y nombre comercial). Varios con el mismo nombre = ambiguo (lista con más de uno). */
+    /**
+     * Contactos por nombre normalizado (nombre fiscal y nombre comercial): [nombre => [id => «Nombre · NIF»]].
+     * Varios con el mismo nombre = ambiguo (lista con más de uno).
+     */
     public function contactosPorNombre(): array
     {
         return Cache::remember('facturacion.holded_contactos', 600, function () {
@@ -36,7 +39,7 @@ class Holded
                 }
                 foreach ($r->json('items', []) as $c) {
                     foreach (array_unique(array_filter([self::normalizar($c['name'] ?? ''), self::normalizar($c['trade_name'] ?? '')])) as $n) {
-                        $porNombre[$n][$c['id']] = $c['name'] ?? '';
+                        $porNombre[$n][$c['id']] = implode(' · ', array_filter([$c['name'] ?? '', $c['code'] ?? '']));
                     }
                 }
                 $cursor = $r->json('cursor');

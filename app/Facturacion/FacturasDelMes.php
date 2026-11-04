@@ -22,10 +22,18 @@ class FacturasDelMes
         $conceptos = config('facturacion.conceptos', []);
         $creadas = BorradorFactura::where('mes', $clave)->get()->keyBy('sociedad');
 
+        $elegidos = ContactoFactura::pluck('holded_id', 'sociedad');
+        $etiquetas = array_replace([], ...array_values($contactos ?? [])); // id => «Nombre · NIF»
+
         $facturas = [];
         foreach ($lineas as $l) {
-            $f = &$facturas[$l['sociedad']];
-            $f['sociedad'] ??= $l['sociedad'];
+            // Sin SL NAME (vacío o #N/A del BUSCARV) se agrupa por cliente para no juntar clientes distintos
+            $sinSociedad = $l['sociedad'] === '' || str_starts_with($l['sociedad'], '#');
+            $f = &$facturas[$sinSociedad ? $l['cliente'] : $l['sociedad']];
+            $f['sociedad'] ??= $sinSociedad ? $l['cliente'] : $l['sociedad'];
+            if ($sinSociedad) {
+                $f['avisos'][] = 'La hoja no tiene sociedad (SL NAME): se busca por el nombre del cliente.';
+            }
             $f['clientes'][$l['cliente']] = true;
             $f['avisos'] ??= [];
             $f['lineas'][] = [
@@ -50,7 +58,7 @@ class FacturasDelMes
             $f['clientes'] = array_keys($f['clientes']);
             $f['avisos'] = array_values(array_unique($f['avisos']));
             $f['total'] = round(array_sum(array_column($f['lineas'], 'importe')), 2);
-            $f['contacto'] = null;
+            [$f['contacto'], $f['contacto_nombre'], $f['manual'], $f['opciones']] = [null, null, false, []];
             $f['borrador'] = $creadas[$sociedad] ?? null;
 
             if ($f['borrador']) {
@@ -61,16 +69,26 @@ class FacturasDelMes
                 continue;
             }
             $f['estado'] = self::SIN_CONTACTO;
-            if ($sociedad === '' || $sociedad === '#N/A') {
-                $f['avisos'][] = 'La hoja no tiene sociedad (SL NAME) para este cliente.';
-            } elseif ($contactos !== null) {
-                $encontrados = $contactos[Holded::normalizar($sociedad)] ?? [];
-                if (count($encontrados) === 1) {
-                    $f['contacto'] = array_key_first($encontrados);
-                    $f['estado'] = self::LISTA;
-                } else {
-                    $f['avisos'][] = $encontrados ? 'Hay varios contactos con este nombre en Holded.' : 'No hay ningún contacto con este nombre en Holded.';
-                }
+            if ($contactos === null) {
+                continue;
+            }
+            $elegido = $elegidos[$sociedad] ?? null;
+            if ($elegido && isset($etiquetas[$elegido])) {
+                [$f['contacto'], $f['contacto_nombre'], $f['manual'], $f['estado']] = [$elegido, $etiquetas[$elegido], true, self::LISTA];
+                continue;
+            }
+            $encontrados = $contactos[Holded::normalizar($sociedad)] ?? [];
+            if (count($encontrados) === 1) {
+                [$f['contacto'], $f['contacto_nombre'], $f['estado']] = [array_key_first($encontrados), reset($encontrados), self::LISTA];
+            } elseif ($encontrados) {
+                $f['avisos'][] = 'Hay varios contactos con este nombre en Holded: elige cuál.';
+                $f['opciones'] = $encontrados;
+            } else {
+                $f['opciones'] = self::parecidos(array_merge([$sociedad], $f['clientes']), $contactos);
+                $f['avisos'][] = $f['opciones'] ? 'No hay ningún contacto con este nombre en Holded. ¿Quisiste decir…?' : 'No hay ningún contacto con este nombre ni parecido en Holded: créalo allí y pulsa Actualizar.';
+            }
+            if ($elegido) {
+                $f['avisos'][] = 'El contacto elegido antes ya no existe en Holded.';
             }
         }
         unset($f);
@@ -78,6 +96,37 @@ class FacturasDelMes
         uasort($facturas, fn ($a, $b) => [$a['estado'] !== self::SIN_CONTACTO, $a['sociedad']] <=> [$b['estado'] !== self::SIN_CONTACTO, $b['sociedad']]);
 
         return $facturas;
+    }
+
+    /** Hasta 5 contactos de Holded con nombre parecido a alguno de los buscados: [id => etiqueta], el más parecido primero. */
+    public static function parecidos(array $buscados, array $contactos): array
+    {
+        $sinForma = fn ($n) => trim(preg_replace('/\b(sl|slu|slp|sa|sau|scp|cb)\b/', '', Holded::normalizar($n)));
+        $buscados = array_filter(array_map($sinForma, $buscados), fn ($b) => strlen($b) >= 3);
+        $puntos = [];
+        $etiquetas = [];
+        foreach ($contactos as $nombre => $ids) {
+            $n = $sinForma($nombre);
+            $mejor = 0;
+            foreach ($buscados as $b) {
+                similar_text($b, $n, $pct);
+                if (strlen($n) >= 4 && (str_contains($n, $b) || str_contains($b, $n))) {
+                    $pct = max($pct, 85);
+                }
+                $mejor = max($mejor, $pct);
+            }
+            if ($mejor >= 60) {
+                foreach ($ids as $id => $etiqueta) {
+                    $puntos[$id] = max($puntos[$id] ?? 0, $mejor);
+                    $etiquetas[$id] = $etiqueta;
+                }
+            }
+        }
+        arsort($puntos);
+
+        $ids = array_keys(array_slice($puntos, 0, 5, true));
+
+        return array_combine($ids, array_map(fn ($id) => $etiquetas[$id], $ids));
     }
 
     public static function euros(float $n): string

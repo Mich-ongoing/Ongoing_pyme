@@ -45,7 +45,9 @@ class FacturacionTest extends TestCase
         Http::fake([
             'api.holded.com/api/v2/contacts*' => Http::response(['items' => [
                 ['id' => 'c-acme', 'name' => 'Acme SL', 'trade_name' => 'Acme'],
-                ['id' => 'c-beta', 'name' => 'BETA SERVEIS, S.L.'],
+                ['id' => 'c-beta', 'name' => 'BETA SERVEIS, S.L.', 'code' => 'B111'],
+                ['id' => 'c-beta2', 'name' => 'Beta Serveis SL', 'code' => 'B222'],
+                ['id' => 'c-gamma', 'name' => 'Gamma Studio SL'],
             ], 'cursor' => null, 'has_more' => false]),
             'api.holded.com/api/v2/invoices' => Http::sequence()->push(['id' => 'f-1'], 201)->push(['id' => 'f-2'], 201),
         ]);
@@ -124,5 +126,41 @@ class FacturacionTest extends TestCase
         $this->actingAs($u)->post('/facturacion/crear', ['mes' => '2026-11', 'sociedades' => ['ACME, S.L.']])->assertSessionHas('error');
         $this->assertSame(1, BorradorFactura::count());
         Http::assertSentCount(2); // contactos (luego en caché) + una sola factura
+    }
+
+    public function test_elegir_contacto_cuando_hay_varios_o_ninguno(): void
+    {
+        $this->holded();
+        $u = User::factory()->create(['role' => 'facturacion']);
+
+        // Beta: dos contactos con el mismo nombre, se distinguen por el NIF
+        $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertOk()
+            ->assertSee('elige cuál')->assertSee('BETA SERVEIS, S.L. · B111')->assertSee('Beta Serveis SL · B222')
+            ->assertSee('¿Quisiste decir…?')->assertSee('Gamma Studio SL'); // Gamma sin SL NAME: sugerencia por el cliente
+
+        // Un id que no es de Holded no se guarda
+        $this->actingAs($u)->post('/facturacion/contacto', ['mes' => '2026-11', 'sociedad' => 'Beta Serveis SL', 'contacto' => ['Beta Serveis SL' => 'inventado']])
+            ->assertSessionHas('error');
+
+        $this->actingAs($u)->post('/facturacion/contacto', ['mes' => '2026-11', 'sociedad' => 'Beta Serveis SL', 'contacto' => ['Beta Serveis SL' => 'c-beta2']])
+            ->assertSessionHas('success');
+        $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertSee('elegido a mano');
+
+        // Botón individual: solo esa factura, con el contacto elegido
+        $this->actingAs($u)->post('/facturacion/crear', ['mes' => '2026-11', 'solo' => 'Beta Serveis SL', 'sociedades' => ['ACME, S.L.', 'Beta Serveis SL']]);
+        $this->assertSame(['Beta Serveis SL'], BorradorFactura::pluck('sociedad')->all());
+        Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/invoices') && $r['contact_id'] === 'c-beta2');
+
+        // Quitar la elección vuelve a pedir que se elija
+        $this->actingAs($u)->post('/facturacion/contacto', ['mes' => '2026-11', 'quitar' => 'Beta Serveis SL']);
+        $this->assertSame(0, \App\Facturacion\ContactoFactura::count());
+    }
+
+    public function test_sugerencias_de_contactos_parecidos(): void
+    {
+        $contactos = ['delvy marketing sl' => ['d1' => 'DELVY MARKETING SL'], 'acme sl' => ['a1' => 'Acme SL'], 'otra cosa sa' => ['o1' => 'Otra Cosa SA']];
+
+        $this->assertSame(['d1' => 'DELVY MARKETING SL'], \App\Facturacion\FacturasDelMes::parecidos(['Delvy'], $contactos));
+        $this->assertSame([], \App\Facturacion\FacturasDelMes::parecidos(['Febrolaser'], $contactos));
     }
 }

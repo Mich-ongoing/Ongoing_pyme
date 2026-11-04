@@ -46,7 +46,7 @@
     </dl>
 
     @if ($facturas)
-        <form method="POST" action="{{ route('facturacion.crear') }}" onsubmit="const n = this.querySelectorAll('input[name=\'sociedades[]\']:checked').length; return n > 0 && confirm('¿Crear ' + n + ' borradores en Holded? Quedan sin aprobar ni enviar.')">
+        <form method="POST" action="{{ route('facturacion.crear') }}" onsubmit="const b = event.submitter; if (b && b.formAction !== this.action) return true; const n = b && b.name === 'solo' ? 1 : this.querySelectorAll('input[name=\'sociedades[]\']:checked').length; return n > 0 && confirm(n === 1 ? '¿Crear este borrador en Holded? Queda sin aprobar ni enviar.' : '¿Crear ' + n + ' borradores en Holded? Quedan sin aprobar ni enviar.')">
             @csrf
             <input type="hidden" name="mes" value="{{ $clave }}">
 
@@ -75,6 +75,9 @@
                                     <p class="text-xs text-neutral-500 truncate">{{ implode(' · ', $f['clientes']) }}</p>
                                 </div>
                                 <div class="flex items-center gap-3">
+                                    @if ($f['estado'] === F::LISTA)
+                                        <button type="submit" name="solo" value="{{ $f['sociedad'] }}" class="text-xs px-2.5 py-1 rounded-lg border border-neutral-300 text-neutral-700 hover:border-neutral-900 hover:text-neutral-900">Crear</button>
+                                    @endif
                                     <span class="text-xs px-2 py-0.5 rounded-full {{ $etiqueta[$f['estado']][1] }}">{{ $etiqueta[$f['estado']][0] }}</span>
                                     <span class="font-semibold tabular-nums whitespace-nowrap">{{ F::euros($f['total']) }} €</span>
                                 </div>
@@ -93,6 +96,29 @@
                                         <li class="pl-3 border-l-2 border-neutral-900">{{ $a }}</li>
                                     @endforeach
                                 </ul>
+                            @endif
+                            @if ($f['contacto_nombre'])
+                                <p class="mt-2 text-xs text-neutral-500">
+                                    Contacto en Holded: <span class="text-neutral-900">{{ $f['contacto_nombre'] }}</span>
+                                    @if ($f['manual'])
+                                        · elegido a mano ·
+                                        <button type="submit" name="quitar" value="{{ $f['sociedad'] }}" formaction="{{ route('facturacion.contacto') }}" class="underline hover:text-neutral-900">Cambiar</button>
+                                    @endif
+                                </p>
+                            @endif
+                            @if ($f['opciones'])
+                                <fieldset class="mt-3 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+                                    <legend class="sr-only">Contacto de Holded para {{ $f['sociedad'] }}</legend>
+                                    <div class="space-y-1.5">
+                                        @foreach ($f['opciones'] as $id => $nombre)
+                                            <label class="flex items-center gap-2 text-sm cursor-pointer">
+                                                <input type="radio" name="contacto[{{ $f['sociedad'] }}]" value="{{ $id }}" class="accent-neutral-900" @checked($loop->first && count($f['opciones']) === 1)>
+                                                {{ $nombre }}
+                                            </label>
+                                        @endforeach
+                                    </div>
+                                    <button type="submit" name="sociedad" value="{{ $f['sociedad'] }}" formaction="{{ route('facturacion.contacto') }}" class="mt-3 text-xs px-3 py-1.5 rounded-lg bg-neutral-900 text-white hover:bg-neutral-700">Usar este contacto</button>
+                                </fieldset>
                             @endif
                             @if ($f['borrador'])
                                 <p class="mt-2 text-xs text-neutral-400">Creado el {{ $f['borrador']->created_at->timezone('Europe/Madrid')->format('d/m/Y H:i') }} · id {{ $f['borrador']->holded_id }}</p>
