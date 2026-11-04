@@ -2,6 +2,7 @@
  * Lector de la hoja de KPIs para la facturación de watch.ongoing.es.
  * Script independiente (script.google.com), no dentro de la hoja: el archivo de la hoja no cambia.
  * Solo lee (permiso spreadsheets.readonly en appsscript.json) y solo responde a quien trae el token.
+ * Lee con el servicio avanzado Sheets: SpreadsheetApp.openById exige permiso de escritura.
  *
  * Puesta en marcha:
  *  1. Pega aquí el ID de la hoja (docs.google.com/spreadsheets/d/<ID>/edit).
@@ -17,11 +18,12 @@ function doGet(e) {
   if (!token || !e || !e.parameter || e.parameter.token !== token) {
     return json_({ error: 'No autorizado' });
   }
-  const hoja = SpreadsheetApp.openById(HOJA_ID).getSheetByName(PESTANA);
-  if (!hoja) {
-    return json_({ error: 'No existe la pestaña «' + PESTANA + '»' });
+  try {
+    const r = Sheets.Spreadsheets.Values.get(HOJA_ID, "'" + PESTANA + "'", { valueRenderOption: 'UNFORMATTED_VALUE' });
+    return json_({ values: r.values || [] });
+  } catch (err) {
+    return json_({ error: 'No se pudo leer la pestaña «' + PESTANA + '»: ' + err.message });
   }
-  return json_({ values: hoja.getDataRange().getValues() });
 }
 
 function json_(datos) {
