@@ -1,0 +1,109 @@
+@php
+    use App\Facturacion\FacturasDelMes as F;
+    $fecha = \Carbon\CarbonImmutable::create($anio, $mes, 1)->locale('es');
+    $clave = $fecha->format('Y-m');
+    $listas = array_filter($facturas, fn ($f) => $f['estado'] === F::LISTA);
+    $creadas = array_filter($facturas, fn ($f) => $f['estado'] === F::CREADA);
+    $problemas = array_filter($facturas, fn ($f) => $f['estado'] === F::SIN_CONTACTO);
+    $etiqueta = [
+        F::LISTA => ['Lista para crear', 'bg-neutral-900 text-white'],
+        F::CREADA => ['Borrador en Holded', 'bg-neutral-100 text-neutral-600'],
+        F::SIN_CONTACTO => ['Revisar', 'bg-white text-neutral-900 ring-1 ring-neutral-900'],
+    ];
+@endphp
+<x-layouts.facturacion :title="'Facturación ' . $fecha->translatedFormat('F Y')">
+    <div class="flex flex-wrap items-end justify-between gap-6 mb-8">
+        <div>
+            <p class="text-sm text-neutral-500">Borradores de factura desde la hoja de KPIs</p>
+            <h1 class="text-3xl font-semibold tracking-tight mt-1">{{ ucfirst($fecha->translatedFormat('F Y')) }}</h1>
+        </div>
+        <div class="flex items-center gap-2 text-sm">
+            <a href="{{ route('facturacion.index', ['mes' => $fecha->subMonth()->format('Y-m')]) }}" class="px-3 py-2 rounded-lg border border-neutral-200 bg-white hover:border-neutral-400" aria-label="Mes anterior">←</a>
+            <form method="GET" class="m-0">
+                <input type="month" name="mes" value="{{ $clave }}" onchange="this.form.submit()" class="px-3 py-2 rounded-lg border border-neutral-200 bg-white" aria-label="Mes">
+            </form>
+            <a href="{{ route('facturacion.index', ['mes' => $fecha->addMonth()->format('Y-m')]) }}" class="px-3 py-2 rounded-lg border border-neutral-200 bg-white hover:border-neutral-400" aria-label="Mes siguiente">→</a>
+            <a href="{{ route('facturacion.index', ['mes' => $clave, 'recargar' => 1]) }}" class="px-3 py-2 rounded-lg text-neutral-500 hover:text-neutral-900" title="Vuelve a leer la hoja y los contactos de Holded">Actualizar</a>
+        </div>
+    </div>
+
+    @if ($error)
+        <div class="mb-8 px-4 py-3 rounded-lg bg-white border border-neutral-900 text-sm">{{ $error }}</div>
+    @endif
+
+    <dl class="grid grid-cols-2 lg:grid-cols-4 gap-px bg-neutral-200 rounded-xl overflow-hidden border border-neutral-200 mb-10">
+        @foreach ([
+            ['Total del mes', F::euros(array_sum(array_column($facturas, 'total'))) . ' €'],
+            ['Listas para crear', count($listas)],
+            ['Ya en Holded', count($creadas)],
+            ['Por revisar', count($problemas)],
+        ] as [$nombre, $valor])
+            <div class="bg-white px-5 py-4">
+                <dt class="text-xs text-neutral-500">{{ $nombre }}</dt>
+                <dd class="text-2xl font-semibold tracking-tight mt-1 tabular-nums">{{ $valor }}</dd>
+            </div>
+        @endforeach
+    </dl>
+
+    @if ($facturas)
+        <form method="POST" action="{{ route('facturacion.crear') }}" onsubmit="const n = this.querySelectorAll('input[name=\'sociedades[]\']:checked').length; return n > 0 && confirm('¿Crear ' + n + ' borradores en Holded? Quedan sin aprobar ni enviar.')">
+            @csrf
+            <input type="hidden" name="mes" value="{{ $clave }}">
+
+            <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
+                <label class="flex items-center gap-2 text-sm text-neutral-600">
+                    <input type="checkbox" class="accent-neutral-900" checked onchange="document.querySelectorAll('input[name=\'sociedades[]\']').forEach(c => c.checked = this.checked)">
+                    Marcar todas las listas
+                </label>
+                <button type="submit" @disabled(! $listas) class="px-5 py-2.5 rounded-lg bg-neutral-900 text-white text-sm font-medium hover:bg-neutral-700 disabled:bg-neutral-300 disabled:cursor-not-allowed">
+                    Crear borradores en Holded
+                </button>
+            </div>
+
+            <div class="bg-white border border-neutral-200 rounded-xl divide-y divide-neutral-200">
+                @foreach ($facturas as $f)
+                    <div class="px-5 py-4 flex gap-4">
+                        <div class="pt-1 w-5 shrink-0">
+                            @if ($f['estado'] === F::LISTA)
+                                <input type="checkbox" name="sociedades[]" value="{{ $f['sociedad'] }}" checked class="accent-neutral-900" aria-label="Crear la factura de {{ $f['sociedad'] }}">
+                            @endif
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                                <div class="min-w-0">
+                                    <p class="font-medium truncate">{{ $f['sociedad'] ?: 'Sin sociedad' }}</p>
+                                    <p class="text-xs text-neutral-500 truncate">{{ implode(' · ', $f['clientes']) }}</p>
+                                </div>
+                                <div class="flex items-center gap-3">
+                                    <span class="text-xs px-2 py-0.5 rounded-full {{ $etiqueta[$f['estado']][1] }}">{{ $etiqueta[$f['estado']][0] }}</span>
+                                    <span class="font-semibold tabular-nums whitespace-nowrap">{{ F::euros($f['total']) }} €</span>
+                                </div>
+                            </div>
+                            <ul class="mt-3 space-y-1 text-sm">
+                                @foreach ($f['lineas'] as $l)
+                                    <li class="flex justify-between gap-4">
+                                        <span class="text-neutral-600">{{ $l['concepto'] }} <span class="text-neutral-400">· {{ $l['descripcion'] }}</span></span>
+                                        <span class="tabular-nums text-neutral-600 whitespace-nowrap">{{ F::euros($l['importe']) }} €</span>
+                                    </li>
+                                @endforeach
+                            </ul>
+                            @if ($f['avisos'])
+                                <ul class="mt-3 space-y-1 text-xs text-neutral-900">
+                                    @foreach ($f['avisos'] as $a)
+                                        <li class="pl-3 border-l-2 border-neutral-900">{{ $a }}</li>
+                                    @endforeach
+                                </ul>
+                            @endif
+                            @if ($f['borrador'])
+                                <p class="mt-2 text-xs text-neutral-400">Creado el {{ $f['borrador']->created_at->timezone('Europe/Madrid')->format('d/m/Y H:i') }} · id {{ $f['borrador']->holded_id }}</p>
+                            @endif
+                        </div>
+                    </div>
+                @endforeach
+            </div>
+            <p class="mt-4 text-xs text-neutral-500">Importes sin IVA; se añade el IVA del 21 %. Los borradores se revisan, aprueban y envían en Holded. La hoja no se modifica.</p>
+        </form>
+    @elseif (! $error)
+        <p class="text-neutral-500">La hoja no tiene importes para este mes.</p>
+    @endif
+</x-layouts.facturacion>

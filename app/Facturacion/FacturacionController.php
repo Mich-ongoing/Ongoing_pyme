@@ -1,0 +1,107 @@
+<?php
+
+namespace App\Facturacion;
+
+use App\Http\Controllers\Controller;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
+use Illuminate\View\View;
+use Throwable;
+
+class FacturacionController extends Controller
+{
+    public function index(Request $request, HojaFacturacion $hoja, Holded $holded): View
+    {
+        [$anio, $mes] = $this->mes($request->query('mes'));
+        if ($request->boolean('recargar')) {
+            Cache::forget('facturacion.holded_contactos');
+        }
+
+        $error = null;
+        $facturas = [];
+        try {
+            $lineas = HojaFacturacion::lineas($hoja->filas(), $anio, $mes);
+            $contactos = config('facturacion.holded_key') ? $holded->contactosPorNombre() : null;
+            $facturas = FacturasDelMes::preparar($lineas, $contactos, $anio, $mes);
+            if ($contactos === null) {
+                $error = 'Falta HOLDED_API_KEY en el .env: se ve lo que hay que facturar, pero no se pueden crear borradores.';
+            }
+        } catch (Throwable $e) {
+            $error = $e->getMessage();
+        }
+
+        return view('facturacion.index', [
+            'anio' => $anio,
+            'mes' => $mes,
+            'facturas' => $facturas,
+            'error' => $error,
+        ]);
+    }
+
+    public function crear(Request $request, HojaFacturacion $hoja, Holded $holded): RedirectResponse
+    {
+        $datos = $request->validate([
+            'mes' => ['required', 'date_format:Y-m'],
+            'sociedades' => ['required', 'array', 'min:1'],
+            'sociedades.*' => ['string'],
+        ], ['sociedades.required' => 'Marca al menos una factura.']);
+        [$anio, $mes] = $this->mes($datos['mes']);
+        $volver = redirect()->route('facturacion.index', ['mes' => $datos['mes']]);
+
+        // Un solo envío a la vez por mes: dos clics seguidos no crean dos facturas
+        $cerrojo = Cache::lock('facturacion.crear.' . $datos['mes'], 300);
+        if (! $cerrojo->get()) {
+            return $volver->with('error', 'Ya se están creando borradores de este mes. Espera un momento y recarga.');
+        }
+
+        $creadas = 0;
+        $fallos = [];
+        try {
+            // Se vuelve a leer la hoja: los importes salen de ella, nunca del formulario
+            $facturas = FacturasDelMes::preparar(HojaFacturacion::lineas($hoja->filas(), $anio, $mes), $holded->contactosPorNombre(), $anio, $mes);
+            foreach (array_unique($datos['sociedades']) as $sociedad) {
+                $f = $facturas[$sociedad] ?? null;
+                if (! $f || $f['estado'] !== FacturasDelMes::LISTA) {
+                    $fallos[] = "{$sociedad}: ya no está lista para crear.";
+                    continue;
+                }
+                try {
+                    $id = $holded->crearBorrador($f['contacto'], now('Europe/Madrid')->toDateString(), $f['lineas']);
+                    BorradorFactura::create([
+                        'mes' => $datos['mes'],
+                        'sociedad' => $sociedad,
+                        'holded_id' => $id,
+                        'total' => $f['total'],
+                        'lineas' => $f['lineas'],
+                        'user_id' => $request->user()->id,
+                    ]);
+                    $creadas++;
+                } catch (Throwable $e) {
+                    Log::warning('Facturación: no se pudo crear el borrador', ['sociedad' => $sociedad, 'error' => $e->getMessage()]);
+                    $fallos[] = "{$sociedad}: {$e->getMessage()}";
+                }
+            }
+        } catch (Throwable $e) {
+            $fallos[] = $e->getMessage();
+        } finally {
+            $cerrojo->release();
+        }
+
+        $volver->with('success', $creadas === 1 ? 'Se ha creado 1 borrador en Holded.' : "Se han creado {$creadas} borradores en Holded.");
+
+        return $fallos ? $volver->with('error', implode("\n", $fallos)) : $volver;
+    }
+
+    /** «2026-11» → [2026, 11]; sin mes, el actual. */
+    private function mes(?string $mes): array
+    {
+        if ($mes && preg_match('/^(\d{4})-(0[1-9]|1[0-2])$/', $mes, $m)) {
+            return [(int) $m[1], (int) $m[2]];
+        }
+        $hoy = now('Europe/Madrid');
+
+        return [$hoy->year, $hoy->month];
+    }
+}
