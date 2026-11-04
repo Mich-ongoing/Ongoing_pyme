@@ -2,32 +2,30 @@
 
 namespace App\Facturacion;
 
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
 /**
  * La hoja «BBDD KPIs Analysis»: una fila por cliente + sociedad + línea de ingreso, y una columna por mes.
- * Solo se lee (con una cuenta de servicio en modo «Lector»): la hoja la usan el contable y otras aplicaciones.
+ * Solo se lee (Apps Script con permiso de solo lectura): la hoja la usan el contable y otras aplicaciones.
  */
 class HojaFacturacion
 {
-    /** Filas de la hoja tal cual (columna A = índice 0), desde Google Sheets. */
+    /** Filas de la hoja tal cual (columna A = índice 0), desde el Apps Script de solo lectura. */
     public function filas(): array
     {
-        $id = config('facturacion.hoja_id');
-        if (! $id) {
-            throw new RuntimeException('Falta FACTURACION_HOJA_ID en el .env.');
+        $url = config('facturacion.apps_script_url');
+        $token = config('facturacion.apps_script_token');
+        if (! $url || ! $token) {
+            throw new RuntimeException('Faltan FACTURACION_APPS_SCRIPT_URL y FACTURACION_APPS_SCRIPT_TOKEN en el .env.');
         }
-        $r = Http::withToken($this->token())->timeout(30)
-            ->get('https://sheets.googleapis.com/v4/spreadsheets/' . $id . '/values/' . rawurlencode(config('facturacion.hoja_rango')), [
-                'valueRenderOption' => 'UNFORMATTED_VALUE',
-            ]);
-        if (! $r->successful()) {
-            throw new RuntimeException('Google Sheets respondió ' . $r->status() . ': ' . $r->json('error.message', $r->body()));
+        // Apps Script responde con una redirección a googleusercontent.com, que Http sigue sola
+        $r = Http::timeout(60)->get($url, ['token' => $token]);
+        if (! $r->successful() || ! is_array($r->json('values'))) {
+            throw new RuntimeException('El Apps Script de la hoja no respondió bien: ' . ($r->json('error') ?? 'HTTP ' . $r->status()));
         }
 
-        return $r->json('values', []);
+        return $r->json('values');
     }
 
     /**
@@ -103,36 +101,5 @@ class HojaFacturacion
         }
 
         return is_numeric($v) ? (float) $v : 0.0;
-    }
-
-    /** Token OAuth de la cuenta de servicio (JWT firmado con su clave privada), 50 minutos en caché. */
-    private function token(): string
-    {
-        return Cache::remember('facturacion.google_token', 3000, function () {
-            $ruta = config('facturacion.google_credenciales');
-            $cred = is_file($ruta) ? json_decode((string) file_get_contents($ruta), true) : null;
-            if (! isset($cred['client_email'], $cred['private_key'])) {
-                throw new RuntimeException('Faltan las credenciales de la cuenta de servicio de Google en ' . $ruta . '.');
-            }
-            $b64 = fn (string $s) => rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
-            $ahora = time();
-            $sin_firma = $b64(json_encode(['alg' => 'RS256', 'typ' => 'JWT'])) . '.' . $b64(json_encode([
-                'iss' => $cred['client_email'],
-                'scope' => 'https://www.googleapis.com/auth/spreadsheets.readonly',
-                'aud' => 'https://oauth2.googleapis.com/token',
-                'iat' => $ahora,
-                'exp' => $ahora + 3600,
-            ]));
-            openssl_sign($sin_firma, $firma, $cred['private_key'], OPENSSL_ALGO_SHA256);
-            $r = Http::asForm()->timeout(20)->post('https://oauth2.googleapis.com/token', [
-                'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-                'assertion' => $sin_firma . '.' . $b64($firma),
-            ]);
-            if (! $r->successful()) {
-                throw new RuntimeException('Google no dio acceso a la hoja: ' . $r->json('error_description', $r->body()));
-            }
-
-            return $r->json('access_token');
-        });
     }
 }

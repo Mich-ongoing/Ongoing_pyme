@@ -62,6 +62,19 @@ class FacturacionTest extends TestCase
         $this->assertContains('Delta SL', array_column(HojaFacturacion::lineas(self::FILAS, 2026, 9), 'sociedad'));
     }
 
+    public function test_lee_la_hoja_del_apps_script_con_el_token(): void
+    {
+        config(['facturacion.apps_script_url' => 'https://script.google.com/macros/s/abc/exec', 'facturacion.apps_script_token' => 'secreto']);
+        Http::fake([
+            'script.google.com/*' => Http::sequence()->push(['values' => [['', 'CLIENT NAME']]])->push(['error' => 'No autorizado']),
+        ]);
+
+        $this->assertSame([['', 'CLIENT NAME']], (new HojaFacturacion)->filas());
+        Http::assertSent(fn (Request $r) => $r['token'] === 'secreto');
+        $this->expectExceptionMessage('No autorizado');
+        (new HojaFacturacion)->filas();
+    }
+
     public function test_numeros_y_nombres(): void
     {
         $this->assertSame(1200.5, HojaFacturacion::numero('1.200,50'));
