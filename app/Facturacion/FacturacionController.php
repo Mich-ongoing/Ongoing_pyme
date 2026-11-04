@@ -49,10 +49,16 @@ class FacturacionController extends Controller
             'sociedades' => ['required_without:solo', 'array'],
             'sociedades.*' => ['string'],
             'solo' => ['nullable', 'string'], // botón «Crear» de una sola factura
+            'conceptos' => ['nullable', 'array'],
+            'conceptos.*' => ['array'],
+            'conceptos.*.*' => ['nullable', 'string', 'max:255'],
+            'descripciones' => ['nullable', 'array'],
+            'descripciones.*' => ['array'],
+            'descripciones.*.*' => ['nullable', 'string', 'max:255'],
         ], ['sociedades.required_without' => 'Marca al menos una factura.']);
         $sociedades = isset($datos['solo']) ? [$datos['solo']] : $datos['sociedades'];
         [$anio, $mes] = $this->mes($datos['mes']);
-        $volver = redirect()->route('facturacion.index', ['mes' => $datos['mes']]);
+        $volver = redirect()->route('facturacion.index', ['mes' => $datos['mes']])->withInput();
 
         // Un solo envío a la vez por mes: dos clics seguidos no crean dos facturas
         $cerrojo = Cache::lock('facturacion.crear.' . $datos['mes'], 300);
@@ -76,6 +82,13 @@ class FacturacionController extends Controller
                     $fallos[] = "{$sociedad}: ya se ha creado en este envío un borrador para el mismo contacto de Holded.";
                     continue;
                 }
+                // Solo el texto de las líneas puede venir del formulario; vacío = el de la hoja
+                $k = FacturasDelMes::clave($sociedad);
+                foreach ($f['lineas'] as $i => &$l) {
+                    $l['concepto'] = trim($datos['conceptos'][$k][$i] ?? '') ?: $l['concepto'];
+                    $l['descripcion'] = trim($datos['descripciones'][$k][$i] ?? '') ?: $l['descripcion'];
+                }
+                unset($l);
                 try {
                     $id = $holded->crearBorrador($f['contacto'], now('Europe/Madrid')->toDateString(), $f['lineas']);
                     BorradorFactura::create([
@@ -115,7 +128,7 @@ class FacturacionController extends Controller
             'contacto' => ['nullable', 'array'],
             'buscar' => ['nullable', 'array'],
         ]);
-        $volver = redirect()->route('facturacion.index', ['mes' => $datos['mes']]);
+        $volver = redirect()->route('facturacion.index', ['mes' => $datos['mes']])->withInput(); // no se pierden los textos editados
 
         if (isset($datos['quitar'])) {
             ContactoFactura::where('sociedad', $datos['quitar'])->delete();

@@ -83,9 +83,22 @@
                                 </div>
                             </div>
                             <ul class="mt-3 space-y-1 text-sm">
-                                @foreach ($f['lineas'] as $l)
+                                @foreach ($f['lineas'] as $i => $l)
                                     <li class="flex justify-between gap-4">
-                                        <span class="text-neutral-600">{{ $l['concepto'] }} <span class="text-neutral-400">· {{ $l['descripcion'] }}</span></span>
+                                        @if ($f['estado'] === F::CREADA)
+                                            <span class="text-neutral-600">{{ $l['concepto'] }} <span class="text-neutral-400">· {{ $l['descripcion'] }}</span></span>
+                                        @else
+                                            {{-- Texto editable antes de crear; el importe no, sale siempre de la hoja --}}
+                                            @php $k = F::clave($f['sociedad']); @endphp
+                                            <span class="flex-1 min-w-0 flex flex-wrap gap-x-1">
+                                                <input name="conceptos[{{ $k }}][{{ $i }}]" value="{{ old("conceptos.$k.$i", $l['concepto']) }}" maxlength="255" aria-label="Concepto"
+                                                    onkeydown="if (event.key === 'Enter') event.preventDefault()"
+                                                    class="flex-1 min-w-40 -mx-1 px-1 rounded bg-transparent text-neutral-700 border border-transparent hover:border-neutral-200 focus:border-neutral-400 focus:bg-white focus:outline-none">
+                                                <input name="descripciones[{{ $k }}][{{ $i }}]" value="{{ old("descripciones.$k.$i", $l['descripcion']) }}" maxlength="255" aria-label="Descripción"
+                                                    onkeydown="if (event.key === 'Enter') event.preventDefault()"
+                                                    class="w-40 px-1 rounded bg-transparent text-neutral-400 border border-transparent hover:border-neutral-200 focus:border-neutral-400 focus:bg-white focus:text-neutral-700 focus:outline-none">
+                                            </span>
+                                        @endif
                                         <span class="tabular-nums text-neutral-600 whitespace-nowrap">{{ F::euros($l['importe']) }} €</span>
                                     </li>
                                 @endforeach
@@ -136,7 +149,7 @@
                     </div>
                 @endforeach
             </div>
-            <p class="mt-4 text-xs text-neutral-500">Importes sin IVA; se añade el IVA del 21 %. Los borradores se revisan, aprueban y envían en Holded. La hoja no se modifica.</p>
+            <p class="mt-4 text-xs text-neutral-500">Puedes cambiar el texto de cada línea antes de crearla; los importes salen siempre de la hoja. Importes sin IVA; se añade el IVA del 21 %. Los borradores se revisan, aprueban y envían en Holded. La hoja no se modifica.</p>
         </form>
         <datalist id="holded-contactos">
             @foreach ($contactos as $nombre)

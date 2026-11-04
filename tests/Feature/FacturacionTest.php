@@ -201,4 +201,23 @@ class FacturacionTest extends TestCase
             ->assertSessionHas('error', fn ($e) => str_contains($e, 'mismo contacto'));
         $this->assertSame(['ACME, S.L.'], BorradorFactura::pluck('sociedad')->all());
     }
+
+    public function test_se_puede_editar_el_texto_de_las_lineas_pero_no_el_importe(): void
+    {
+        $this->holded();
+        $u = User::factory()->create(['role' => 'facturacion']);
+        $k = \App\Facturacion\FacturasDelMes::clave('ACME, S.L.');
+
+        $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertSee('name="conceptos['.$k.'][1]"', false);
+        $this->actingAs($u)->post('/facturacion/crear', [
+            'mes' => '2026-11', 'solo' => 'ACME, S.L.',
+            'conceptos' => [$k => [1 => 'Campañas Google Ads']], 'descripciones' => [$k => [0 => 'Noviembre 2026 (SEO local)']],
+            'importes' => [$k => [1 => 1]], // no existe: el importe sale de la hoja
+        ]);
+
+        Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/invoices')
+            && $r['items'][1]['name'] === 'Campañas Google Ads' && $r['items'][1]['price'] == 1450
+            && $r['items'][0]['name'] === 'Posicionamiento SEO' && $r['items'][0]['description'] === 'Noviembre 2026 (SEO local)');
+        $this->assertSame('Campañas Google Ads', BorradorFactura::sole()->lineas[1]['concepto']);
+    }
 }

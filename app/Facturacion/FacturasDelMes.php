@@ -147,6 +147,12 @@ class FacturasDelMes
         return array_combine($ids, array_map(fn ($id) => $etiquetas[$id], $ids));
     }
 
+    /** Clave de una sociedad para nombres de campo: el nombre puede llevar puntos, que Laravel lee como anidación. */
+    public static function clave(string $sociedad): string
+    {
+        return md5($sociedad);
+    }
+
     public static function euros(float $n): string
     {
         return number_format($n, 2, ',', '.');
