@@ -20,10 +20,10 @@ class FacturasDelMes
         $clave = sprintf('%d-%02d', $anio, $mes);
         $nombreMes = ucfirst(CarbonImmutable::create($anio, $mes, 1)->locale('es')->translatedFormat('F Y'));
         $conceptos = config('facturacion.conceptos', []);
-        $creadas = BorradorFactura::where('mes', $clave)->get()->keyBy('sociedad');
+        $creadas = BorradorFactura::where('mes', $clave)->get();
 
         $elegidos = ContactoFactura::pluck('holded_id', 'sociedad');
-        $etiquetas = array_replace([], ...array_values($contactos ?? [])); // id => «Nombre · NIF»
+        $etiquetas = Holded::etiquetas($contactos ?? []);
 
         $facturas = [];
         foreach ($lineas as $l) {
@@ -59,36 +59,31 @@ class FacturasDelMes
             $f['avisos'] = array_values(array_unique($f['avisos']));
             $f['total'] = round(array_sum(array_column($f['lineas'], 'importe')), 2);
             [$f['contacto'], $f['contacto_nombre'], $f['manual'], $f['opciones']] = [null, null, false, []];
-            $f['borrador'] = $creadas[$sociedad] ?? null;
-
+            $f['estado'] = self::SIN_CONTACTO;
+            // Ya hecha este mes: por la sociedad o, si en la hoja cambió el nombre, por el contacto de Holded
+            $f['borrador'] = $creadas->firstWhere('sociedad', $sociedad);
+            if (! $f['borrador'] && $contactos !== null) {
+                self::contacto($f, $contactos, $etiquetas, $elegidos[$sociedad] ?? null);
+                $f['borrador'] = $f['contacto'] ? $creadas->firstWhere('contacto_id', $f['contacto']) : null;
+                if ($f['borrador']) {
+                    $f['avisos'][] = "Este mes ya hay un borrador para este contacto de Holded (se creó como «{$f['borrador']->sociedad}»).";
+                }
+            }
             if ($f['borrador']) {
                 $f['estado'] = self::CREADA;
+                $f['opciones'] = [];
                 if (abs($f['borrador']->total - $f['total']) >= 0.01) {
                     $f['avisos'][] = sprintf('La hoja ha cambiado desde que se creó el borrador: %s → %s €. Corrígelo en Holded.', self::euros($f['borrador']->total), self::euros($f['total']));
                 }
-                continue;
             }
-            $f['estado'] = self::SIN_CONTACTO;
-            if ($contactos === null) {
-                continue;
-            }
-            $elegido = $elegidos[$sociedad] ?? null;
-            if ($elegido && isset($etiquetas[$elegido])) {
-                [$f['contacto'], $f['contacto_nombre'], $f['manual'], $f['estado']] = [$elegido, $etiquetas[$elegido], true, self::LISTA];
-                continue;
-            }
-            $encontrados = $contactos[Holded::normalizar($sociedad)] ?? [];
-            if (count($encontrados) === 1) {
-                [$f['contacto'], $f['contacto_nombre'], $f['estado']] = [array_key_first($encontrados), reset($encontrados), self::LISTA];
-            } elseif ($encontrados) {
-                $f['avisos'][] = 'Hay varios contactos con este nombre en Holded: elige cuál.';
-                $f['opciones'] = $encontrados;
-            } else {
-                $f['opciones'] = self::parecidos(array_merge([$sociedad], $f['clientes']), $contactos);
-                $f['avisos'][] = $f['opciones'] ? 'No hay ningún contacto con este nombre en Holded. ¿Quisiste decir…?' : 'No hay ningún contacto con este nombre ni parecido en Holded: créalo allí y pulsa Actualizar.';
-            }
-            if ($elegido) {
-                $f['avisos'][] = 'El contacto elegido antes ya no existe en Holded.';
+        }
+        unset($f);
+
+        // Dos filas de la hoja hacia el mismo contacto: se avisa, y al crear solo sale la primera
+        $porContacto = array_count_values(array_filter(array_map(fn ($f) => $f['estado'] === self::LISTA ? $f['contacto'] : null, $facturas)));
+        foreach ($facturas as &$f) {
+            if ($f['estado'] === self::LISTA && $porContacto[$f['contacto']] > 1) {
+                $f['avisos'][] = 'Otra factura de este mes va al mismo contacto de Holded: solo se creará una.';
             }
         }
         unset($f);
@@ -96,6 +91,29 @@ class FacturasDelMes
         uasort($facturas, fn ($a, $b) => [$a['estado'] !== self::SIN_CONTACTO, $a['sociedad']] <=> [$b['estado'] !== self::SIN_CONTACTO, $b['sociedad']]);
 
         return $facturas;
+    }
+
+    /** Busca el contacto de Holded: el elegido a mano, el único con ese nombre, o deja opciones para elegir. */
+    private static function contacto(array &$f, array $contactos, array $etiquetas, ?string $elegido): void
+    {
+        if ($elegido && isset($etiquetas[$elegido])) {
+            [$f['contacto'], $f['contacto_nombre'], $f['manual'], $f['estado']] = [$elegido, $etiquetas[$elegido], true, self::LISTA];
+
+            return;
+        }
+        $encontrados = $contactos[Holded::normalizar($f['sociedad'])] ?? [];
+        if (count($encontrados) === 1) {
+            [$f['contacto'], $f['contacto_nombre'], $f['estado']] = [array_key_first($encontrados), reset($encontrados), self::LISTA];
+        } elseif ($encontrados) {
+            $f['avisos'][] = 'Hay varios contactos con este nombre en Holded: elige cuál.';
+            $f['opciones'] = $encontrados;
+        } else {
+            $f['opciones'] = self::parecidos(array_merge([$f['sociedad']], $f['clientes']), $contactos);
+            $f['avisos'][] = $f['opciones'] ? 'No hay ningún contacto con este nombre en Holded. ¿Quisiste decir…?' : 'No hay ningún contacto con este nombre ni parecido en Holded: búscalo abajo o créalo allí y pulsa Actualizar.';
+        }
+        if ($elegido) {
+            $f['avisos'][] = 'El contacto elegido antes ya no existe en Holded.';
+        }
     }
 
     /** Hasta 5 contactos de Holded con nombre parecido a alguno de los buscados: [id => etiqueta], el más parecido primero. */

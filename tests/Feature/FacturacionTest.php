@@ -163,4 +163,42 @@ class FacturacionTest extends TestCase
         $this->assertSame(['d1' => 'DELVY MARKETING SL'], \App\Facturacion\FacturasDelMes::parecidos(['Delvy'], $contactos));
         $this->assertSame([], \App\Facturacion\FacturasDelMes::parecidos(['Febrolaser'], $contactos));
     }
+
+    public function test_buscador_y_no_repite_factura_del_mismo_contacto_en_el_mes(): void
+    {
+        $this->holded();
+        $u = User::factory()->create(['role' => 'facturacion']);
+
+        $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertSee('id="holded-contactos"', false)->assertSee('<option value="Gamma Studio SL">', false);
+
+        // Lo buscado tiene que ser exactamente un contacto de la lista
+        $this->actingAs($u)->post('/facturacion/contacto', ['mes' => '2026-11', 'sociedad' => 'Gamma', 'buscar' => ['Gamma' => 'Gamma']])->assertSessionHas('error');
+        $this->actingAs($u)->post('/facturacion/contacto', ['mes' => '2026-11', 'sociedad' => 'Gamma', 'buscar' => ['Gamma' => 'Gamma Studio SL'], 'contacto' => ['Gamma' => 'c-acme']]);
+        $this->assertSame('c-gamma', \App\Facturacion\ContactoFactura::where('sociedad', 'Gamma')->value('holded_id'));
+
+        $this->actingAs($u)->post('/facturacion/crear', ['mes' => '2026-11', 'solo' => 'Gamma']);
+        $this->assertSame('c-gamma', BorradorFactura::sole()->contacto_id);
+
+        // En la hoja se corrige el #N/A de Gamma: misma empresa con otro nombre, y no se ofrece crearla otra vez
+        \App\Facturacion\ContactoFactura::create(['sociedad' => 'Gamma Studio, S.L.', 'holded_id' => 'c-gamma']);
+        $filas = self::FILAS;
+        $filas[7][2] = 'Gamma Studio, S.L.';
+        $f = \App\Facturacion\FacturasDelMes::preparar(HojaFacturacion::lineas($filas, 2026, 11), app(Holded::class)->contactosPorNombre(), 2026, 11);
+        $this->assertSame(\App\Facturacion\FacturasDelMes::CREADA, $f['Gamma Studio, S.L.']['estado']);
+
+        $this->actingAs($u)->post('/facturacion/crear', ['mes' => '2026-11', 'solo' => 'Gamma'])->assertSessionHas('error');
+        $this->assertSame(1, BorradorFactura::count());
+    }
+
+    public function test_dos_filas_al_mismo_contacto_solo_crean_un_borrador(): void
+    {
+        $this->holded();
+        $u = User::factory()->create(['role' => 'facturacion']);
+        \App\Facturacion\ContactoFactura::create(['sociedad' => 'Beta Serveis SL', 'holded_id' => 'c-acme']);
+
+        $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertSee('va al mismo contacto de Holded');
+        $this->actingAs($u)->post('/facturacion/crear', ['mes' => '2026-11', 'sociedades' => ['ACME, S.L.', 'Beta Serveis SL']])
+            ->assertSessionHas('error', fn ($e) => str_contains($e, 'mismo contacto'));
+        $this->assertSame(['ACME, S.L.'], BorradorFactura::pluck('sociedad')->all());
+    }
 }

@@ -21,6 +21,7 @@ class FacturacionController extends Controller
 
         $error = null;
         $facturas = [];
+        $contactos = null;
         try {
             $lineas = HojaFacturacion::lineas($hoja->filas(), $anio, $mes);
             $contactos = config('facturacion.holded_key') ? $holded->contactosPorNombre() : null;
@@ -36,6 +37,7 @@ class FacturacionController extends Controller
             'anio' => $anio,
             'mes' => $mes,
             'facturas' => $facturas,
+            'contactos' => Holded::etiquetas($contactos ?? []), // para el buscador
             'error' => $error,
         ]);
     }
@@ -63,10 +65,15 @@ class FacturacionController extends Controller
         try {
             // Se vuelve a leer la hoja: los importes salen de ella, nunca del formulario
             $facturas = FacturasDelMes::preparar(HojaFacturacion::lineas($hoja->filas(), $anio, $mes), $holded->contactosPorNombre(), $anio, $mes);
+            $usados = []; // contactos ya facturados en este envío
             foreach (array_unique($sociedades) as $sociedad) {
                 $f = $facturas[$sociedad] ?? null;
                 if (! $f || $f['estado'] !== FacturasDelMes::LISTA) {
                     $fallos[] = "{$sociedad}: ya no está lista para crear.";
+                    continue;
+                }
+                if (isset($usados[$f['contacto']])) {
+                    $fallos[] = "{$sociedad}: ya se ha creado en este envío un borrador para el mismo contacto de Holded.";
                     continue;
                 }
                 try {
@@ -74,11 +81,13 @@ class FacturacionController extends Controller
                     BorradorFactura::create([
                         'mes' => $datos['mes'],
                         'sociedad' => $sociedad,
+                        'contacto_id' => $f['contacto'],
                         'holded_id' => $id,
                         'total' => $f['total'],
                         'lineas' => $f['lineas'],
                         'user_id' => $request->user()->id,
                     ]);
+                    $usados[$f['contacto']] = true;
                     $creadas++;
                 } catch (Throwable $e) {
                     Log::warning('Facturación: no se pudo crear el borrador', ['sociedad' => $sociedad, 'error' => $e->getMessage()]);
@@ -104,6 +113,7 @@ class FacturacionController extends Controller
             'sociedad' => ['required_without:quitar', 'string'],
             'quitar' => ['nullable', 'string'],
             'contacto' => ['nullable', 'array'],
+            'buscar' => ['nullable', 'array'],
         ]);
         $volver = redirect()->route('facturacion.index', ['mes' => $datos['mes']]);
 
@@ -113,10 +123,20 @@ class FacturacionController extends Controller
             return $volver;
         }
         $sociedad = $datos['sociedad'];
-        $id = $datos['contacto'][$sociedad] ?? null;
+        $etiquetas = Holded::etiquetas($holded->contactosPorNombre());
+        // Lo escrito en el buscador manda sobre las sugerencias; tiene que ser un contacto de la lista
+        $buscado = trim((string) ($datos['buscar'][$sociedad] ?? ''));
+        if ($buscado !== '') {
+            $ids = array_keys($etiquetas, $buscado, true);
+            if (count($ids) !== 1) {
+                return $volver->with('error', $ids ? "{$sociedad}: hay varios contactos «{$buscado}» en Holded; elige uno de la lista." : "{$sociedad}: no hay ningún contacto «{$buscado}» en Holded; elígelo de la lista que sale al escribir.");
+            }
+            $id = $ids[0];
+        } else {
+            $id = $datos['contacto'][$sociedad] ?? null;
+        }
         // El id viene del formulario: solo se acepta si es un contacto que existe en Holded
-        $existe = $id && collect($holded->contactosPorNombre())->contains(fn ($ids) => isset($ids[$id]));
-        if (! $existe) {
+        if (! $id || ! isset($etiquetas[$id])) {
             return $volver->with('error', "{$sociedad}: elige uno de los contactos.");
         }
         ContactoFactura::updateOrCreate(['sociedad' => $sociedad], ['holded_id' => $id]);

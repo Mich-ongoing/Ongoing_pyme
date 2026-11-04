@@ -106,18 +106,27 @@
                                     @endif
                                 </p>
                             @endif
-                            @if ($f['opciones'])
+                            @if ($f['estado'] === F::SIN_CONTACTO && $contactos)
                                 <fieldset class="mt-3 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
                                     <legend class="sr-only">Contacto de Holded para {{ $f['sociedad'] }}</legend>
-                                    <div class="space-y-1.5">
-                                        @foreach ($f['opciones'] as $id => $nombre)
-                                            <label class="flex items-center gap-2 text-sm cursor-pointer">
-                                                <input type="radio" name="contacto[{{ $f['sociedad'] }}]" value="{{ $id }}" class="accent-neutral-900" @checked($loop->first && count($f['opciones']) === 1)>
-                                                {{ $nombre }}
-                                            </label>
-                                        @endforeach
+                                    @if ($f['opciones'])
+                                        <div class="space-y-1.5 mb-3">
+                                            @foreach ($f['opciones'] as $id => $nombre)
+                                                <label class="flex items-center gap-2 text-sm cursor-pointer">
+                                                    <input type="radio" name="contacto[{{ $f['sociedad'] }}]" value="{{ $id }}" class="accent-neutral-900" @checked($loop->first && count($f['opciones']) === 1)>
+                                                    {{ $nombre }}
+                                                </label>
+                                            @endforeach
+                                        </div>
+                                    @endif
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        {{-- Enter pulsaría el primer botón del formulario (un «Crear»): se usa el de este contacto --}}
+                                        <input type="search" name="buscar[{{ $f['sociedad'] }}]" list="holded-contactos" autocomplete="off"
+                                            placeholder="{{ $f['opciones'] ? '¿No es ninguno? Busca en Holded…' : 'Busca el contacto en Holded…' }}" aria-label="Buscar contacto de Holded para {{ $f['sociedad'] }}"
+                                            onkeydown="if (event.key === 'Enter') { event.preventDefault(); this.closest('fieldset').querySelector('button').click() }"
+                                            class="flex-1 min-w-56 px-3 py-1.5 rounded-lg border border-neutral-200 bg-white text-sm">
+                                        <button type="submit" name="sociedad" value="{{ $f['sociedad'] }}" formaction="{{ route('facturacion.contacto') }}" class="text-xs px-3 py-1.5 rounded-lg bg-neutral-900 text-white hover:bg-neutral-700">Usar este contacto</button>
                                     </div>
-                                    <button type="submit" name="sociedad" value="{{ $f['sociedad'] }}" formaction="{{ route('facturacion.contacto') }}" class="mt-3 text-xs px-3 py-1.5 rounded-lg bg-neutral-900 text-white hover:bg-neutral-700">Usar este contacto</button>
                                 </fieldset>
                             @endif
                             @if ($f['borrador'])
@@ -129,6 +138,11 @@
             </div>
             <p class="mt-4 text-xs text-neutral-500">Importes sin IVA; se añade el IVA del 21 %. Los borradores se revisan, aprueban y envían en Holded. La hoja no se modifica.</p>
         </form>
+        <datalist id="holded-contactos">
+            @foreach ($contactos as $nombre)
+                <option value="{{ $nombre }}"></option>
+            @endforeach
+        </datalist>
     @elseif (! $error)
         <p class="text-neutral-500">La hoja no tiene importes para este mes.</p>
     @endif

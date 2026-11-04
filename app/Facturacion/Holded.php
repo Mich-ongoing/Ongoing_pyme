@@ -49,6 +49,12 @@ class Holded
         });
     }
 
+    /** De la salida de contactosPorNombre() a [id => «Nombre · NIF»], un contacto una vez. */
+    public static function etiquetas(array $contactos): array
+    {
+        return array_replace([], ...array_values($contactos));
+    }
+
     /** Crea la factura sin aprobar (borrador) y devuelve su id. */
     public function crearBorrador(string $contactoId, string $fecha, array $lineas): string
     {
