@@ -117,9 +117,10 @@ class FacturacionTest extends TestCase
         Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/invoices')
             && $r['contact_id'] === 'c-acme'
             && $r['items'][1]['price'] == 1450
-            && $r['items'][1]['name'] === 'Gestión de campañas de publicidad (Paid Media)'
+            && $r['items'][1]['name'] === 'MRR Paid media'
+            && $r['items'][1]['description'] === 'Gestión de campañas de publicidad (Paid Media)'
             && $r['items'][1]['taxes'] === ['s_iva_21']
-            && $r['items'][0]['description'] === 'Noviembre 2026'
+            && $r['items'][0]['units'] === 1
             && $r->header('Authorization')[0] === 'Bearer clave-prueba');
 
         // Segundo envío de la misma factura: no se crea otra
@@ -202,22 +203,32 @@ class FacturacionTest extends TestCase
         $this->assertSame(['ACME, S.L.'], BorradorFactura::pluck('sociedad')->all());
     }
 
-    public function test_se_puede_editar_el_texto_de_las_lineas_pero_no_el_importe(): void
+    public function test_se_editan_descripcion_y_unidades_pero_no_concepto_ni_total(): void
     {
         $this->holded();
         $u = User::factory()->create(['role' => 'facturacion']);
         $k = \App\Facturacion\FacturasDelMes::clave('ACME, S.L.');
 
-        $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertSee('name="conceptos['.$k.'][1]"', false);
+        $this->actingAs($u)->get('/facturacion?mes=2026-11')
+            ->assertSee('name="descripciones['.$k.'][1]"', false)->assertSee('name="unidades['.$k.'][1]"', false)
+            ->assertDontSee('name="conceptos[', false);
+
+        // 1.450 € no se reparte exacto en 3: no se crea nada
+        $this->actingAs($u)->post('/facturacion/crear', ['mes' => '2026-11', 'solo' => 'ACME, S.L.', 'unidades' => [$k => [1 => 3]]])
+            ->assertSessionHas('error', fn ($e) => str_contains($e, 'no se reparte exacto'));
+        $this->assertSame(0, BorradorFactura::count());
+
         $this->actingAs($u)->post('/facturacion/crear', [
             'mes' => '2026-11', 'solo' => 'ACME, S.L.',
-            'conceptos' => [$k => [1 => 'Campañas Google Ads']], 'descripciones' => [$k => [0 => 'Noviembre 2026 (SEO local)']],
-            'importes' => [$k => [1 => 1]], // no existe: el importe sale de la hoja
+            'conceptos' => [$k => [1 => 'Otro concepto']], // ya no se acepta
+            'descripciones' => [$k => [0 => 'Mantenimiento SEO']],
+            'unidades' => [$k => [1 => 2]],
         ]);
 
         Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/invoices')
-            && $r['items'][1]['name'] === 'Campañas Google Ads' && $r['items'][1]['price'] == 1450
-            && $r['items'][0]['name'] === 'Posicionamiento SEO' && $r['items'][0]['description'] === 'Noviembre 2026 (SEO local)');
-        $this->assertSame('Campañas Google Ads', BorradorFactura::sole()->lineas[1]['concepto']);
+            && $r['items'][1]['name'] === 'MRR Paid media' && $r['items'][1]['units'] === 2 && $r['items'][1]['price'] == 725
+            && $r['items'][0]['description'] === 'Mantenimiento SEO' && $r['items'][0]['price'] == 800);
+        $this->assertSame(2250.0, BorradorFactura::sole()->total);
+        $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertSee('2 × 725,00 €');
     }
 }

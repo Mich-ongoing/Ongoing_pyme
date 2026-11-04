@@ -2,7 +2,6 @@
 
 namespace App\Facturacion;
 
-use Carbon\CarbonImmutable;
 
 /** Agrupa las líneas de la hoja en una factura por sociedad y le pone estado y avisos antes de crear nada. */
 class FacturasDelMes
@@ -18,7 +17,6 @@ class FacturasDelMes
     public static function preparar(array $lineas, ?array $contactos, int $anio, int $mes): array
     {
         $clave = sprintf('%d-%02d', $anio, $mes);
-        $nombreMes = ucfirst(CarbonImmutable::create($anio, $mes, 1)->locale('es')->translatedFormat('F Y'));
         $conceptos = config('facturacion.conceptos', []);
         $creadas = BorradorFactura::where('mes', $clave)->get();
 
@@ -37,14 +35,12 @@ class FacturasDelMes
             $f['clientes'][$l['cliente']] = true;
             $f['avisos'] ??= [];
             $f['lineas'][] = [
-                'concepto' => $conceptos[$l['linea']] ?? $l['linea'],
-                'descripcion' => $nombreMes,
+                'concepto' => $l['linea'],
+                'descripcion' => $conceptos[$l['linea']] ?? '',
                 'linea' => $l['linea'],
+                'unidades' => 1,
                 'importe' => round($l['importe'], 2),
             ];
-            if (! isset($conceptos[$l['linea']])) {
-                $f['avisos'][] = "«{$l['linea']}» no tiene concepto definido: sale tal cual.";
-            }
             if (str_contains($l['linea'], 'Kids Digitales')) {
                 $f['avisos'][] = 'Kit Digital: revisa en el borrador el texto obligatorio de la subvención.';
             }

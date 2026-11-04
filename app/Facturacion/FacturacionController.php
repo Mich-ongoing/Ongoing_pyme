@@ -49,9 +49,9 @@ class FacturacionController extends Controller
             'sociedades' => ['required_without:solo', 'array'],
             'sociedades.*' => ['string'],
             'solo' => ['nullable', 'string'], // botón «Crear» de una sola factura
-            'conceptos' => ['nullable', 'array'],
-            'conceptos.*' => ['array'],
-            'conceptos.*.*' => ['nullable', 'string', 'max:255'],
+            'unidades' => ['nullable', 'array'],
+            'unidades.*' => ['array'],
+            'unidades.*.*' => ['nullable', 'integer', 'min:1', 'max:999'],
             'descripciones' => ['nullable', 'array'],
             'descripciones.*' => ['array'],
             'descripciones.*.*' => ['nullable', 'string', 'max:255'],
@@ -82,13 +82,23 @@ class FacturacionController extends Controller
                     $fallos[] = "{$sociedad}: ya se ha creado en este envío un borrador para el mismo contacto de Holded.";
                     continue;
                 }
-                // Solo el texto de las líneas puede venir del formulario; vacío = el de la hoja
+                // Del formulario solo vienen descripción y unidades; el total de cada línea es siempre el de la hoja
                 $k = FacturasDelMes::clave($sociedad);
+                $reparto = null;
                 foreach ($f['lineas'] as $i => &$l) {
-                    $l['concepto'] = trim($datos['conceptos'][$k][$i] ?? '') ?: $l['concepto'];
-                    $l['descripcion'] = trim($datos['descripciones'][$k][$i] ?? '') ?: $l['descripcion'];
+                    if (array_key_exists($i, $datos['descripciones'][$k] ?? [])) {
+                        $l['descripcion'] = trim((string) $datos['descripciones'][$k][$i]);
+                    }
+                    $l['unidades'] = (int) ($datos['unidades'][$k][$i] ?? 1) ?: 1;
+                    if (abs(round($l['importe'] / $l['unidades'], 2) * $l['unidades'] - $l['importe']) >= 0.005) {
+                        $reparto = sprintf('%s: %s € no se reparte exacto en %d unidades.', $l['concepto'], FacturasDelMes::euros($l['importe']), $l['unidades']);
+                    }
                 }
                 unset($l);
+                if ($reparto) {
+                    $fallos[] = "{$sociedad}: {$reparto}";
+                    continue;
+                }
                 try {
                     $id = $holded->crearBorrador($f['contacto'], now('Europe/Madrid')->toDateString(), $f['lineas']);
                     BorradorFactura::create([

@@ -55,7 +55,7 @@ class Holded
         return array_replace([], ...array_values($contactos));
     }
 
-    /** Crea la factura sin aprobar (borrador) y devuelve su id. */
+    /** Crea la factura sin aprobar (borrador) y devuelve su id. El importe de cada línea es su total: precio = importe / unidades. */
     public function crearBorrador(string $contactoId, string $fecha, array $lineas): string
     {
         $r = $this->http()->post(self::API . '/invoices', [
@@ -65,8 +65,8 @@ class Holded
                 'name' => $l['concepto'],
                 'description' => $l['descripcion'],
                 'type' => 'service',
-                'units' => 1,
-                'price' => $l['importe'],
+                'units' => $l['unidades'] ?? 1,
+                'price' => round($l['importe'] / ($l['unidades'] ?? 1), 2),
                 'taxes' => [config('facturacion.iva')],
             ], $lineas),
         ]);

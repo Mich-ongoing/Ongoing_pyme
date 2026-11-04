@@ -9,7 +9,7 @@ return [
     'apps_script_url' => env('FACTURACION_APPS_SCRIPT_URL'),
     'apps_script_token' => env('FACTURACION_APPS_SCRIPT_TOKEN'),
 
-    // REVENUE LINE de la hoja => concepto de la factura. Lo que no esté aquí sale tal cual y con aviso.
+    // REVENUE LINE de la hoja => descripción por defecto de la línea (el concepto es la REVENUE LINE tal cual).
     'conceptos' => [
         'MRR Paid media' => 'Gestión de campañas de publicidad (Paid Media)',
         'MRR Paid variables' => 'Inversión variable en campañas de publicidad',
