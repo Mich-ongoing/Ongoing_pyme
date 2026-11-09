@@ -53,6 +53,7 @@ class HojaFacturacion
         $antes = $mes === 1 ? self::columna($filas[$cab - 1], $filas[$cab], $anio - 1, 12) : self::columna($filas[$cab - 1], $filas[$cab], $anio, $mes - 1);
 
         $ignorar = config('facturacion.ignorar', []);
+        $contiene = config('facturacion.ignorar_si_contiene', []);
         $lineas = [];
         for ($i = $cab + 1; $i < count($filas); $i++) {
             $f = $filas[$i];
@@ -61,7 +62,7 @@ class HojaFacturacion
             }
             $linea = trim((string) ($f[3] ?? ''));
             $importe = self::numero($f[$col] ?? '');
-            if ($importe <= 0 || in_array($linea, $ignorar, true)) {
+            if ($importe <= 0 || in_array($linea, $ignorar, true) || \Illuminate\Support\Str::contains($linea, $contiene, true)) {
                 continue;
             }
             $lineas[] = [

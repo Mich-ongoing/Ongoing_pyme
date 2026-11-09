@@ -23,9 +23,11 @@ class FacturacionTest extends TestCase
         ['', 'Acme', 'ACME, S.L.', 'MRR SEO', '800', '800', '800', ''],
         ['', 'Acme', 'ACME, S.L.', 'MRR Paid media', '1.200', '1.200', '1.450', ''],
         ['', 'Acme', 'ACME, S.L.', 'Invoiced 2024', '', '', '500', ''],
-        ['', 'Beta', 'Beta Serveis SL', 'ONE-OFF Kids Digitales SEO', '', '', '167', ''],
+        ['', 'Beta', 'Beta Serveis SL', 'ONE-OFF RRSS', '', '', '167', ''],
         ['', 'Gamma', '#N/A', 'Maintainment web', '', '', '40', ''],
         ['', 'Delta', 'Delta SL', 'MRR SEO', '300', '0', '', ''],
+        ['', 'Acme', 'ACME, S.L.', 'ONE-OFF Kids Digitales SEO', '', '', '2.000', ''], // Kit Digital: no se factura aquí
+        ['', 'Epsilon', 'Epsilon SL', 'ONE-OFF Kids Digitales', '', '', '1.000', ''],
         ['', 'TOTAL REVENUE', '-', '-', '2.300', '2.000', '2.957', ''],
         ['', 'Acme', 'ACME, S.L.', 'MRR SEO', '', '', '25', ''], // bloque de horas: no es facturación
     ];
@@ -57,7 +59,7 @@ class FacturacionTest extends TestCase
     {
         $l = HojaFacturacion::lineas(self::FILAS, 2026, 11);
 
-        $this->assertSame(['MRR SEO', 'MRR Paid media', 'ONE-OFF Kids Digitales SEO', 'Maintainment web'], array_column($l, 'linea'));
+        $this->assertSame(['MRR SEO', 'MRR Paid media', 'ONE-OFF RRSS', 'Maintainment web'], array_column($l, 'linea'));
         $this->assertSame(1450.0, $l[1]['importe']);
         $this->assertSame(1200.0, $l[1]['anterior']);
         $this->assertSame('ACME, S.L.', $l[0]['sociedad']);
@@ -94,7 +96,7 @@ class FacturacionTest extends TestCase
         $this->actingAs($u)->get('/webminder-panel')->assertRedirect(route('facturacion.index'));
         $this->actingAs($u)->get('/webminder-panel/sitios')->assertRedirect(route('facturacion.index'));
         $this->actingAs($u)->post('/webminder-panel/cerrojo/todos')->assertRedirect(route('facturacion.index'));
-        $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertOk()->assertSee('ACME, S.L.')->assertSee('Kit Digital');
+        $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertOk()->assertSee('ACME, S.L.')->assertDontSee('Epsilon')->assertDontSee('Kids Digitales');
 
         $otro = User::factory()->create(['role' => 'lector']);
         $this->actingAs($otro)->get('/facturacion')->assertForbidden();

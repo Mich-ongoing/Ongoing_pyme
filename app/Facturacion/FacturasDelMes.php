@@ -41,9 +41,6 @@ class FacturasDelMes
                 'unidades' => 1,
                 'importe' => round($l['importe'], 2),
             ];
-            if (str_contains($l['linea'], 'Kids Digitales')) {
-                $f['avisos'][] = 'Kit Digital: revisa en el borrador el texto obligatorio de la subvención.';
-            }
             if ($l['anterior'] > 0 && abs($l['anterior'] - $l['importe']) >= 0.01) {
                 $f['avisos'][] = sprintf('%s cambia respecto al mes anterior: %s → %s €.', $l['linea'], self::euros($l['anterior']), self::euros($l['importe']));
             }

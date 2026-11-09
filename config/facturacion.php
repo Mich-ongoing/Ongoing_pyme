@@ -20,12 +20,11 @@ return [
         'ONE- OFF SEO' => 'Proyecto SEO',
         'ONE-OFF RRSS' => 'Proyecto de redes sociales',
         'ONE-OFF Paid Media' => 'Proyecto de publicidad (Paid Media)',
-        'ONE-OFF Kids Digitales' => 'Kit Digital',
-        'ONE-OFF Kids Digitales SEO' => 'Kit Digital · Posicionamiento SEO',
-        'ONE-OFF Kids Digitales RRSS' => 'Kit Digital · Gestión de redes sociales',
         'Others refacturing' => 'Refacturación de gastos',
     ],
 
     // Líneas que no se facturan (histórico o vacías)
     'ignorar' => ['Invoiced 2024', '-', ''],
+    // Líneas que contienen este texto tampoco: el Kit Digital se factura fuera de aquí
+    'ignorar_si_contiene' => ['Kids Digitales'],
 ];
