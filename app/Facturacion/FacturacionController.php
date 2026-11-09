@@ -23,7 +23,7 @@ class FacturacionController extends Controller
         $facturas = [];
         $contactos = null;
         try {
-            $lineas = HojaFacturacion::lineas($hoja->filas(), $anio, $mes);
+            $lineas = HojaFacturacion::lineas($hoja->filas(), $anio, $mes, $hoja->comentarios);
             $contactos = config('facturacion.holded_key') ? $holded->contactosPorNombre() : null;
             $facturas = FacturasDelMes::preparar($lineas, $contactos, $anio, $mes);
             if ($contactos === null) {
@@ -70,7 +70,7 @@ class FacturacionController extends Controller
         $fallos = [];
         try {
             // Se vuelve a leer la hoja: los importes salen de ella, nunca del formulario
-            $facturas = FacturasDelMes::preparar(HojaFacturacion::lineas($hoja->filas(), $anio, $mes), $holded->contactosPorNombre(), $anio, $mes);
+            $facturas = FacturasDelMes::preparar(HojaFacturacion::lineas($hoja->filas(), $anio, $mes, $hoja->comentarios), $holded->contactosPorNombre(), $anio, $mes);
             $usados = []; // contactos ya facturados en este envío
             foreach (array_unique($sociedades) as $sociedad) {
                 $f = $facturas[$sociedad] ?? null;

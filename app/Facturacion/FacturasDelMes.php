@@ -36,7 +36,8 @@ class FacturasDelMes
             $f['avisos'] ??= [];
             $f['lineas'][] = [
                 'concepto' => $l['linea'],
-                'descripcion' => $conceptos[$l['linea']] ?? '',
+                // El comentario de la celda del mes manda; si no hay, la descripción por defecto de la línea
+                'descripcion' => mb_substr(($l['comentario'] ?? '') ?: ($conceptos[$l['linea']] ?? ''), 0, 255),
                 'linea' => $l['linea'],
                 'unidades' => 1,
                 'importe' => round($l['importe'], 2),

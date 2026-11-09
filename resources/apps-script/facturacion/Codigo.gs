@@ -20,10 +20,41 @@ function doGet(e) {
   }
   try {
     const r = Sheets.Spreadsheets.Values.get(HOJA_ID, "'" + PESTANA + "'", { valueRenderOption: 'UNFORMATTED_VALUE' });
-    return json_({ values: r.values || [] });
+    let comentarios = {}, errorComentarios = null;
+    try {
+      comentarios = comentarios_();
+    } catch (err) {
+      errorComentarios = err.message; // sin comentarios el panel usa las descripciones por defecto
+    }
+    return json_({ values: r.values || [], comentarios: comentarios, error_comentarios: errorComentarios });
   } catch (err) {
     return json_({ error: 'No se pudo leer la pestaña «' + PESTANA + '»: ' + err.message });
   }
+}
+
+/** Primer comentario de cada celda de la pestaña: { "fila,columna": texto }, contando desde A1 = "0,0". */
+function comentarios_() {
+  // Por REST y no con el servicio Sheets: commentsViewMode es reciente y el servicio avanzado puede no conocerlo
+  const url = 'https://sheets.googleapis.com/v4/spreadsheets/' + HOJA_ID
+    + '?ranges=' + encodeURIComponent("'" + PESTANA + "'")
+    + '&commentsViewMode=COMMENTS_VIEW_MODE_INCLUDED'
+    + '&fields=' + encodeURIComponent('comments(anchorId,headPost(content,createTime)),sheets(commentAnchors)');
+  const res = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) throw new Error('HTTP ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 300));
+  const r = JSON.parse(res.getContentText());
+  const celdas = {};
+  ((r.sheets && r.sheets[0] && r.sheets[0].commentAnchors) || []).forEach(function (a) {
+    celdas[a.anchorId] = (a.range.startRowIndex || 0) + ',' + (a.range.startColumnIndex || 0);
+  });
+  const primero = {};
+  (r.comments || []).forEach(function (c) {
+    const celda = celdas[c.anchorId];
+    if (!celda || !c.headPost) return;
+    if (!primero[celda] || c.headPost.createTime < primero[celda].createTime) primero[celda] = c.headPost;
+  });
+  const salida = {};
+  Object.keys(primero).forEach(function (k) { salida[k] = primero[k].content; });
+  return salida;
 }
 
 function json_(datos) {

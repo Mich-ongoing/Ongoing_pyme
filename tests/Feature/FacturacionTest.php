@@ -38,7 +38,12 @@ class FacturacionTest extends TestCase
         config(['facturacion.holded_key' => 'clave-prueba']);
         // La hoja de Google, sustituida por las filas de arriba
         $this->app->instance(HojaFacturacion::class, new class extends HojaFacturacion {
-            public function filas(): array { return FacturacionTest::FILAS; }
+            public function filas(): array
+            {
+                $this->comentarios = ['3,6' => "Campaña  de\nnoviembre"]; // celda de 11/2026 de «MRR SEO» de Acme
+
+                return FacturacionTest::FILAS;
+            }
         });
     }
 
@@ -70,10 +75,12 @@ class FacturacionTest extends TestCase
     {
         config(['facturacion.apps_script_url' => 'https://script.google.com/macros/s/abc/exec', 'facturacion.apps_script_token' => 'secreto']);
         Http::fake([
-            'script.google.com/*' => Http::sequence()->push(['values' => [['', 'CLIENT NAME']]])->push(['error' => 'No autorizado']),
+            'script.google.com/*' => Http::sequence()->push(['values' => [['', 'CLIENT NAME']], 'comentarios' => ['0,1' => 'hola']])->push(['error' => 'No autorizado']),
         ]);
 
-        $this->assertSame([['', 'CLIENT NAME']], (new HojaFacturacion)->filas());
+        $hoja = new HojaFacturacion;
+        $this->assertSame([['', 'CLIENT NAME']], $hoja->filas());
+        $this->assertSame(['0,1' => 'hola'], $hoja->comentarios);
         Http::assertSent(fn (Request $r) => $r['token'] === 'secreto');
         $this->expectExceptionMessage('No autorizado');
         (new HojaFacturacion)->filas();
@@ -121,6 +128,7 @@ class FacturacionTest extends TestCase
             && $r['items'][1]['price'] == 1450
             && $r['items'][1]['name'] === 'MRR Paid media'
             && $r['items'][1]['description'] === 'Gestión de campañas de publicidad (Paid Media)'
+            && $r['items'][0]['description'] === 'Campaña de noviembre' // el comentario de la celda manda
             && $r['items'][1]['taxes'] === ['s_iva_21']
             && $r['items'][0]['units'] === 1
             && $r->header('Authorization')[0] === 'Bearer clave-prueba');

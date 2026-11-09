@@ -11,6 +11,9 @@ use RuntimeException;
  */
 class HojaFacturacion
 {
+    /** Primer comentario de cada celda de la última lectura: ["fila,columna" => texto], mismos índices que filas(). */
+    public array $comentarios = [];
+
     /** Filas de la hoja tal cual (columna A = índice 0), desde el Apps Script de solo lectura. */
     public function filas(): array
     {
@@ -25,6 +28,11 @@ class HojaFacturacion
             throw new RuntimeException('El Apps Script de la hoja no respondió bien: ' . ($r->json('error') ?? 'HTTP ' . $r->status()));
         }
 
+        $this->comentarios = (array) $r->json('comentarios', []);
+        if ($r->json('error_comentarios')) {
+            \Illuminate\Support\Facades\Log::warning('Facturación: el Apps Script no pudo leer los comentarios de la hoja: ' . $r->json('error_comentarios'));
+        }
+
         return $r->json('values');
     }
 
@@ -32,9 +40,10 @@ class HojaFacturacion
      * Líneas con importe en ese mes, con el importe del mes anterior para avisar de cambios.
      * Encuentra las columnas por las cabeceras (año encima, mes debajo), no por posición.
      *
-     * @return list<array{cliente: string, sociedad: string, linea: string, importe: float, anterior: float}>
+     * @param  array  $comentarios  HojaFacturacion::$comentarios: el de la celda del importe del mes va a 'comentario'
+     * @return list<array{cliente: string, sociedad: string, linea: string, importe: float, anterior: float, comentario: string}>
      */
-    public static function lineas(array $filas, int $anio, int $mes): array
+    public static function lineas(array $filas, int $anio, int $mes, array $comentarios = []): array
     {
         $cab = null;
         foreach ($filas as $i => $f) {
@@ -71,6 +80,7 @@ class HojaFacturacion
                 'linea' => $linea,
                 'importe' => $importe,
                 'anterior' => $antes === null ? 0.0 : self::numero($f[$antes] ?? ''),
+                'comentario' => trim(preg_replace('/\s+/', ' ', (string) ($comentarios["$i,$col"] ?? ''))),
             ];
         }
 
