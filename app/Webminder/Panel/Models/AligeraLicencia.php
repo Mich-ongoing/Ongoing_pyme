@@ -67,7 +67,7 @@ class AligeraLicencia extends Model
             . "Plan {$nombre} ({$webs}), válida hasta el " . $this->caduca_en->timezone('Europe/Madrid')->format('d/m/Y') . " y se renueva sola cada año.\n\n"
             . "Para activarla: en WordPress ve a Aligera → Licencia, pega la clave y pulsa «Activar». Con la licencia activa recibirás las actualizaciones en Escritorio → Actualizaciones, como cualquier plugin.\n\n"
             . 'Descarga del plugin: ' . route('aligera.descargar', $this->clave) . "\n"
-            . ($portal ? "Facturas, cambio de tarjeta o cancelar la renovación: {$portal}\n" : '')
+            . ($portal ? "Facturas, cambio de plan o de tarjeta y cancelar la renovación: {$portal}\n" : '')
             . "\nSi tienes cualquier duda, responde a este correo.\n";
         try {
             Mail::raw($texto, fn ($m) => $m->to($this->email)->subject('Tu licencia de Aligera Pro'));

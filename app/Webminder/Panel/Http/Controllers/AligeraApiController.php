@@ -29,6 +29,7 @@ class AligeraApiController
         match ($evento['type'] ?? '') {
             'checkout.session.completed' => $this->compra($o),
             'invoice.paid' => $this->renovacion($o),
+            'customer.subscription.updated' => $this->cambioDePlan($o),
             // Se acabó la suscripción (no renovó o se canceló con reembolso): la licencia caduca ya
             'customer.subscription.deleted' => AligeraLicencia::where('stripe_suscripcion', $o['id'] ?? '')
                 ->update(['caduca_en' => Carbon::createFromTimestamp($o['ended_at'] ?? time())]),
@@ -74,6 +75,22 @@ class AligeraApiController
         if ($caduca->gt($licencia->caduca_en)) {
             $licencia->update(['caduca_en' => $caduca]);
         }
+    }
+
+    /** Cambio de plan desde el portal de Stripe: Stripe cobra la diferencia; aquí solo cambian el plan y las webs. */
+    private function cambioDePlan(array $o): void
+    {
+        $plan = config('services.aligera.precios')[$o['items']['data'][0]['price']['id'] ?? ''] ?? null;
+        $licencia = AligeraLicencia::where('stripe_suscripcion', $o['id'] ?? '')->first();
+        if (!$licencia || !isset(AligeraLicencia::PLANES[$plan]) || $plan === $licencia->plan) {
+            return; // este evento llega también por renovaciones y cambios de tarjeta
+        }
+        $antes = AligeraLicencia::PLANES[$licencia->plan][0];
+        $licencia->update(['plan' => $plan, 'sitios_max' => AligeraLicencia::PLANES[$plan][1]]);
+        $usadas = $licencia->activaciones()->count();
+        // Si baja de plan con más webs activas, no se desactiva ninguna: solo no podrá activar más
+        AvisosService::enviar('Aligera: cambio de plan', "{$licencia->email} pasa de {$antes} a " . AligeraLicencia::PLANES[$plan][0] . " ({$licencia->clave})."
+            . ($usadas > $licencia->sitios_max ? "\nTiene {$usadas} webs activas y el plan nuevo admite {$licencia->sitios_max}: no podrá activar más hasta liberar alguna." : ''));
     }
 
     private function firmaStripeValida(Request $request): bool

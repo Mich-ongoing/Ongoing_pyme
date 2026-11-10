@@ -21,6 +21,7 @@ class AligeraLicenciasTest extends TestCase
             'mail.from.address' => 'watch@ongoing.test',
             'services.aligera.stripe_webhook' => self::SECRETO,
             'services.aligera.enlaces' => ['plink_pro' => 'profesional'],
+            'services.aligera.precios' => ['price_per' => 'personal', 'price_pro' => 'profesional', 'price_age' => 'agencia'],
             'services.avisos.email' => 'michell@ongoing.test',
         ]);
     }
@@ -58,6 +59,28 @@ class AligeraLicenciasTest extends TestCase
         $this->assertMatchesRegularExpression('/^ALG-[0-9A-F]{4}(-[0-9A-F]{4}){3}$/', $l->clave);
         $this->assertTrue($l->caduca_en->between(now()->addYear(), now()->addYear()->addDays(8)));
         $this->assertSame(['ana@acme.test', 'michell@ongoing.test'], $this->para()); // la clave al cliente y el aviso de venta
+    }
+
+    public function test_el_cambio_de_plan_en_el_portal_cambia_las_webs_y_avisa(): void
+    {
+        $this->stripe($this->compra())->assertOk();
+        $l = AligeraLicencia::sole();
+        $l->activaciones()->createMany([['dominio' => 'a.test'], ['dominio' => 'b.test']]);
+        $cambio = fn ($precio) => ['type' => 'customer.subscription.updated', 'data' => ['object' => [
+            'id' => 'sub_1', 'items' => ['data' => [['price' => ['id' => $precio]]]],
+        ]]];
+
+        $this->stripe($cambio('price_age'))->assertOk();
+        $this->assertSame(['agencia', 25], [$l->fresh()->plan, $l->fresh()->sitios_max]);
+
+        $this->stripe($cambio('price_per'))->assertOk(); // baja con 2 webs activas: se quedan, pero no caben más
+        $this->assertSame(['personal', 1, 2], [$l->fresh()->plan, $l->fresh()->sitios_max, $l->activaciones()->count()]);
+        $this->postJson('/api/aligera/activar', ['clave' => $l->clave, 'sitio' => 'c.test'])->assertStatus(403);
+
+        $antes = count($this->para());
+        $this->stripe($cambio('price_per'))->assertOk(); // renovación o cambio de tarjeta: mismo plan, sin aviso
+        $this->stripe($cambio('price_otro'))->assertOk(); // precio que no es de Aligera
+        $this->assertSame([$antes, 'personal'], [count($this->para()), $l->fresh()->plan]);
     }
 
     public function test_sin_firma_valida_o_con_firma_vieja_no_hace_nada(): void

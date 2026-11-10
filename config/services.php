@@ -51,10 +51,13 @@ return [
     ],
 
     // Aligera Pro: secreto del webhook de Stripe (whsec_…), qué Payment Link es cada plan
-    // ("plink_1:personal,plink_2:profesional,plink_3:agencia") y enlace al portal de clientes de Stripe.
+    // ("plink_1:personal,plink_2:profesional,plink_3:agencia"), qué precio es cada plan para los cambios
+    // de plan del portal ("price_1:personal,…") y enlace al portal de clientes de Stripe.
     'aligera' => [
         'stripe_webhook' => env('ALIGERA_STRIPE_WEBHOOK_SECRET'),
         'enlaces' => collect(explode(',', (string) env('ALIGERA_STRIPE_ENLACES')))->filter()
+            ->mapWithKeys(fn ($par) => [trim(strstr($par, ':', true)) => trim(substr(strstr($par, ':'), 1))])->all(),
+        'precios' => collect(explode(',', (string) env('ALIGERA_STRIPE_PRECIOS')))->filter()
             ->mapWithKeys(fn ($par) => [trim(strstr($par, ':', true)) => trim(substr(strstr($par, ':'), 1))])->all(),
         'portal' => env('ALIGERA_STRIPE_PORTAL'),
     ],
