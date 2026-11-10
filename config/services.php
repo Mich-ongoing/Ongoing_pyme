@@ -50,6 +50,15 @@ return [
         'archivo' => env('WEBMINDER_CERROJO_ARCHIVO', storage_path('app/cerrojo/cerrojo.php')),
     ],
 
+    // Aligera Pro: secreto del webhook de Stripe (whsec_…), qué Payment Link es cada plan
+    // ("plink_1:personal,plink_2:profesional,plink_3:agencia") y enlace al portal de clientes de Stripe.
+    'aligera' => [
+        'stripe_webhook' => env('ALIGERA_STRIPE_WEBHOOK_SECRET'),
+        'enlaces' => collect(explode(',', (string) env('ALIGERA_STRIPE_ENLACES')))->filter()
+            ->mapWithKeys(fn ($par) => [trim(strstr($par, ':', true)) => trim(substr(strstr($par, ':'), 1))])->all(),
+        'portal' => env('ALIGERA_STRIPE_PORTAL'),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

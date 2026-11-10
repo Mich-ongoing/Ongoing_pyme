@@ -10,6 +10,8 @@ use App\Webminder\Panel\Http\Controllers\IngestaController;
 use App\Webminder\Panel\Http\Controllers\InjertoController;
 use App\Webminder\Panel\Http\Controllers\CerrojoController;
 use App\Webminder\Panel\Http\Controllers\ActualizacionesController;
+use App\Webminder\Panel\Http\Controllers\AligeraApiController;
+use App\Webminder\Panel\Http\Controllers\AligeraController;
 
 // Autoactualización del worker: manifiesto y zip (artisan webminder:worker-zip). Públicos: no llevan secretos.
 Route::get('webminder/worker/{archivo}', function (string $archivo) {
@@ -22,6 +24,15 @@ Route::get('webminder/worker/{archivo}', function (string $archivo) {
 
 // Ingesta del log de actividad de los workers: sin sesión ni CSRF, autenticada por firma HMAC.
 Route::post('api/webminder/ingest', IngestaController::class)->middleware('throttle:120,1')->name('webminder.ingest');
+
+// Licencias de Aligera Pro: webhook de Stripe (firmado por Stripe) y lo que pide el plugin. Sin sesión ni CSRF.
+Route::post('api/aligera/stripe', [AligeraApiController::class, 'stripe'])->middleware('throttle:120,1')->name('aligera.stripe');
+Route::middleware('throttle:30,1')->group(function () {
+    Route::post('api/aligera/activar', [AligeraApiController::class, 'activar'])->name('aligera.activar');
+    Route::post('api/aligera/desactivar', [AligeraApiController::class, 'desactivar'])->name('aligera.desactivar');
+    Route::get('api/aligera/actualizacion', [AligeraApiController::class, 'actualizacion'])->name('aligera.actualizacion');
+    Route::get('aligera/descargar/{clave}', [AligeraApiController::class, 'descargar'])->name('aligera.descargar');
+});
 
 Route::prefix('webminder-panel')->name('webminder-panel.')->middleware(['web', 'auth'])->group(function () {
     
@@ -65,6 +76,13 @@ Route::prefix('webminder-panel')->name('webminder-panel.')->middleware(['web', '
     Route::get('/operaciones/{sitio}/reporte-salud', [OperacionesController::class, 'reporteSalud'])->name('operaciones.reporte-salud');
     Route::post('/operaciones/{sitio}/sso', [OperacionesController::class, 'sso'])->name('operaciones.sso');
     Route::post('/operaciones/{sitio}/revision-seguridad', [OperacionesController::class, 'revisionSeguridad'])->name('operaciones.revision-seguridad');
+
+    // Licencias de Aligera Pro
+    Route::get('/aligera', [AligeraController::class, 'index'])->name('aligera.index');
+    Route::post('/aligera', [AligeraController::class, 'store'])->name('aligera.store');
+    Route::post('/aligera/{licencia}/reenviar', [AligeraController::class, 'reenviar'])->name('aligera.reenviar');
+    Route::post('/aligera/{licencia}/anular', [AligeraController::class, 'anular'])->name('aligera.anular');
+    Route::post('/aligera/activaciones/{activacion}/liberar', [AligeraController::class, 'liberar'])->name('aligera.liberar');
 
     // Injerto: aprobación de código y scripts externos vigilados
     Route::get('/injerto', [InjertoController::class, 'index'])->name('injerto.index');

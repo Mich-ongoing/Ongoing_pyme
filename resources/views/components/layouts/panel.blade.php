@@ -46,6 +46,10 @@
                     <span class="text-base">🔒</span>
                     <span>Cerrojo</span>
                 </a>
+                <a href="/webminder-panel/aligera" class="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all {{ request()->is('webminder-panel/aligera*') ? 'bg-indigo-600 text-white font-semibold shadow-md shadow-indigo-600/30' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200' }}">
+                    <span class="text-base">🔑</span>
+                    <span>Licencias Aligera</span>
+                </a>
                 <a href="{{ route('facturacion.index') }}" class="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all text-slate-400 hover:bg-slate-900 hover:text-slate-200">
                     <span class="text-base">🧾</span>
                     <span>Facturación</span>

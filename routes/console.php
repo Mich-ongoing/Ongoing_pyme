@@ -117,6 +117,30 @@ Artisan::command('webminder:worker-zip', function () {
     $this->info("Worker {$version} → {$destino}/webminder-worker.zip (manifiesto en {$base}manifest.json)");
 })->purpose('Empaqueta el worker y publica su manifiesto de autoactualización');
 
+Artisan::command('aligera:publicar {zip} {--cambios= : Qué trae esta versión}', function (string $zip) {
+    // El zip de construir.py: dentro, aligera-pro/aligera.php con la cabecera «Version:»
+    $z = new ZipArchive();
+    $z->open($zip) === true || throw new RuntimeException("No se puede abrir {$zip}");
+    $cabecera = $z->getFromName('aligera-pro/aligera.php');
+    $z->close();
+    preg_match('/^ \* Version:\s*(\S+)/m', (string) $cabecera, $m);
+    $version = $m[1] ?? throw new RuntimeException('El zip no tiene aligera-pro/aligera.php con «Version:» (¿es la edición gratuita?)');
+    preg_match('/^ \* Requires at least:\s*(\S+)/m', $cabecera, $wp);
+    preg_match('/^ \* Requires PHP:\s*(\S+)/m', $cabecera, $php);
+
+    $destino = storage_path('app/aligera');
+    File::ensureDirectoryExists($destino);
+    File::copy($zip, $destino . '/aligera-pro.zip');
+    File::put($destino . '/manifest.json', json_encode([
+        'version' => $version,
+        'requires' => $wp[1] ?? '6.0',
+        'requires_php' => $php[1] ?? '7.4',
+        'last_updated' => now()->toDateTimeString(),
+        'sections' => ['changelog' => $this->option('cambios') ?: 'Versión ' . $version],
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    $this->info("Aligera Pro {$version} publicada: las webs con licencia la verán en sus actualizaciones (en 12 h como mucho).");
+})->purpose('Publica una versión de Aligera Pro para las actualizaciones automáticas');
+
 // Plesk: un solo cron "* * * * * php artisan schedule:run"
 Schedule::command('queue:work --stop-when-empty --max-time=3500 --timeout=3600')->everyMinute()->withoutOverlapping(70)->runInBackground();
 Schedule::command('webminder:verificar')->hourly()->withoutOverlapping();
