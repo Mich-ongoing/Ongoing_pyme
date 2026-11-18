@@ -22,6 +22,34 @@ class CerrojoService
         return is_file($archivo) ? file_get_contents($archivo) : null;
     }
 
+    /**
+     * Falsa verificación de Cloudflare (ClickFix) en la página tal como la ve un visitante. Es la misma idea que
+     * cerrojo_clickfix() del plugin, pero desde fuera: se ve aunque el código esté donde Cerrojo no mira, y el
+     * cargador se esconde a los administradores pero no a watchWP. Visto en bleyabogados.es, minestamp.com y cuneocalcio.it (18-nov).
+     */
+    public static function falsoCloudflare(string $html): ?string
+    {
+        // <script src="data:text/javascript;base64,…"> (LiteSpeed): se mira también lo que lleva dentro
+        $html = preg_replace_callback('~data:(?:text|application)/(?:x-)?javascript;base64,([A-Za-z0-9+/=]{20,})~i',
+            fn ($m) => $m[0] . "\n" . base64_decode($m[1]), $html);
+        $script = 'createElement\s*\(\s*["\']script';
+        $patrones = [
+            'copia un comando al portapapeles y pide ejecutarlo' => '~(clipboard\s*\.\s*writeText|execCommand\s*\(\s*["\']copy).{0,3000}?\b(powershell|mshta|cmd(\.exe)?\s+/[ck]|rundll32|msiexec|Invoke-Expression|iex)\b|\b(powershell|mshta|rundll32|msiexec)\b.{0,3000}?(clipboard\s*\.\s*writeText|execCommand\s*\(\s*["\']copy)~is',
+            'carga scripts de direcciones cifradas (XOR)' => "~charCodeAt\\s*\\([^)]*\\)\\s*\\^\\s*\\w+\\s*\\.\\s*charCodeAt.{0,1500}?$script|$script.{0,1500}?charCodeAt\\s*\\([^)]*\\)\\s*\\^\\s*\\w+\\s*\\.\\s*charCodeAt~is",
+            'lee código de la blockchain (EtherHiding)' => '~eth_call.{0,3000}?(bsc|binance)|(bsc-dataseed|data-seed-prebsc|bsc-testnet)[\w.-]*.{0,3000}?eth_call~is',
+        ];
+        preg_match_all('~<script\b[^>]*>.*?</script\s*>~is', $html, $scripts);
+        foreach ($scripts[0] as $s) {
+            foreach ($patrones as $motivo => $re) {
+                if (preg_match($re, $s)) {
+                    return $motivo;
+                }
+            }
+        }
+
+        return null;
+    }
+
     /** Versión que el panel tiene para instalar, o null si no se ha subido el archivo. */
     public static function version(): ?string
     {

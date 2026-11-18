@@ -3,6 +3,7 @@
 use App\Webminder\Panel\Models\SitioWeb;
 use App\Webminder\Panel\Services\AgenteComunicacionService;
 use App\Webminder\Panel\Services\AvisosService;
+use App\Webminder\Panel\Services\CerrojoService;
 use App\Webminder\Panel\Services\InjertoService;
 use App\Webminder\Panel\Services\RondaNocturna;
 use App\Webminder\Panel\Services\VulnerabilidadesService;
@@ -61,6 +62,14 @@ Artisan::command('webminder:vigilar', function (RondaNocturna $ronda, InjertoSer
                 . "\n  Título: " . trim(html_entity_decode(strip_tags($titulo[1] ?? '(sin título)'))) . "\n\n"
                 . "Si es una página de Plesk (login o 404), lo habitual es que en el DNS de Cloudflare haya un registro AAAA (IPv6) "
                 . "que apunta a una IP en la que la web no está configurada: bórralo o asígnale esa IPv6 en Plesk. Afecta también a los visitantes.");
+        }
+        if (!$fallo && ($motivo = CerrojoService::falsoCloudflare($r->body())) && Cache::add("watchwp-falso-cloudflare-{$sitio->id}", true, now()->addDay())) {
+            AvisosService::enviar("🚨 {$sitio->nombre} muestra un falso Cloudflare a los visitantes",
+                "La portada de {$sitio->url} lleva código malicioso ({$motivo}).\n\n"
+                . "Es el ataque «ClickFix»: enseña una verificación falsa de Cloudflare y pide pulsar Win+R, Ctrl+V y Enter, "
+                . "lo que ejecuta un programa malicioso en el ordenador del visitante. A los administradores conectados no se lo enseña.\n\n"
+                . "Qué hacer: actualizar Cerrojo y pulsar «Limpiar» en watchWP (sección Cerrojo); si sigue, buscar el código en "
+                . "Code Snippets, Header Footer Code Manager, el tema y los plugins nulled. Cambiar contraseñas de los administradores.");
         }
         // Webs con Injerto: dominios de los scripts de la portada (no páginas de error ni retos de Cloudflare)
         if (!$fallo && $sitio->tiene_injerto && $r->status() === 200) {
