@@ -108,6 +108,12 @@ Paid (5 $/mes) no hay límite diario.
   Cada ficha de web muestra la tarjeta «Fallos de seguridad conocidos». Si el feed llega vacío o roto,
   el comando falla y se mantiene el índice anterior. Wordfence da 429 si se pide a menudo: una vez al día.
 
+## Archivos privados descargables
+
+- `webminder:expuestos` a las 07:30: pide a cada web `.env`, `.git/HEAD`, `debug.log`, copias de `wp-config`
+  y volcados `.sql` típicos, lee solo los primeros 8 KB y avisa si el contenido es el de verdad (no basta
+  un 200: muchas webs devuelven la portada). Un aviso por web y archivo cada 30 días.
+
 ## Comentarios cerrados (worker ≥ 2.12)
 
 - En **Cerrojo**, columna «Comentarios» por web y «Cerrar comentarios en todas» (en cola). El worker

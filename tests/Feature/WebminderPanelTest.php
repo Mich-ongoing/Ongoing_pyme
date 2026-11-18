@@ -1041,4 +1041,26 @@ class WebminderPanelTest extends TestCase
         $this->assertNotEmpty(json_decode(file_get_contents(VulnerabilidadesService::indice()), true)); // sigue el de antes
         @unlink(VulnerabilidadesService::indice());
     }
+
+    public function test_avisa_una_vez_de_archivos_privados_descargables_y_no_de_la_portada_con_200(): void
+    {
+        config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
+        $base = rtrim($this->sitio->url, '/');
+        Http::fake([
+            "$base/.git/HEAD" => Http::response("ref: refs/heads/main\n"),
+            "$base/wp-config.php.bak" => Http::response("<?php\ndefine( 'DB_PASSWORD', 'x' );"),
+            "$base/.env" => Http::response('<html><body>Portada con DB_PASSWORD en un post</body></html>'), // web que da 200 a todo
+            "$base/*" => Http::response('No encontrado', 404),
+        ]);
+
+        $this->artisan('webminder:expuestos')->assertSuccessful();
+        $this->artisan('webminder:expuestos')->assertSuccessful();
+
+        $correos = $this->correos();
+        $this->assertCount(1, $correos); // la segunda vuelta no repite
+        $texto = $correos[0]->getTextBody();
+        $this->assertStringContainsString("$base/.git/HEAD", $texto);
+        $this->assertStringContainsString("$base/wp-config.php.bak", $texto);
+        $this->assertStringNotContainsString("$base/.env", $texto);
+    }
 }

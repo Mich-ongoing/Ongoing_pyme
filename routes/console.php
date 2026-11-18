@@ -167,6 +167,42 @@ Artisan::command('webminder:vulnerabilidades', function (VulnerabilidadesService
     $this->info(count($lineas) . ' avisos nuevos.');
 })->purpose('Avisa de plugins, temas o núcleo con fallos de seguridad conocidos (Wordfence Intelligence)');
 
+/**
+ * Archivos que nunca deberían poder descargarse (contraseñas de la BD, código, errores). Se mira el contenido
+ * y no solo el 200: muchas webs responden 200 con la portada a cualquier ruta.
+ */
+Artisan::command('webminder:expuestos', function () {
+    $wpConfig = '/DB_PASSWORD/';
+    $rutas = [
+        '.env' => '/^\s*(APP_KEY|DB_PASSWORD|DB_HOST)\s*=/m', '.git/HEAD' => '/^(ref: refs\/|[0-9a-f]{40}\s*$)/',
+        'wp-content/debug.log' => '/PHP (Fatal|Parse|Warning|Notice|Deprecated)/', 'debug.log' => '/PHP (Fatal|Parse|Warning|Notice|Deprecated)/',
+        'wp-config.php.bak' => $wpConfig, 'wp-config.php.old' => $wpConfig, 'wp-config.php.save' => $wpConfig,
+        'wp-config.php~' => $wpConfig, 'wp-config.bak' => $wpConfig, 'wp-config.txt' => $wpConfig,
+        'backup.sql' => '/(CREATE TABLE|INSERT INTO)/', 'database.sql' => '/(CREATE TABLE|INSERT INTO)/', 'dump.sql' => '/(CREATE TABLE|INSERT INTO)/',
+    ];
+    $lineas = [];
+    foreach (SitioWeb::where('activo', true)->orderBy('nombre')->get() as $sitio) {
+        foreach ($rutas as $ruta => $firma) {
+            $url = rtrim($sitio->url, '/') . '/' . $ruta;
+            try {
+                // Solo los primeros KB: un debug.log puede pesar cientos de MB
+                $r = Http::timeout(15)->withoutRedirecting()->withUserAgent('watchWP')->withOptions(['stream' => true])->get($url);
+                $inicio = $r->successful() ? $r->toPsrResponse()->getBody()->read(8192) : '';
+            } catch (\Throwable) {
+                continue;
+            }
+            if (preg_match($firma, $inicio) && Cache::add("watchwp-expuesto-{$sitio->id}-{$ruta}", true, now()->addDays(30))) {
+                $lineas[] = "{$sitio->nombre}: {$url}";
+            }
+        }
+    }
+    if ($lineas) {
+        AvisosService::enviar('⚠ Archivos privados descargables en ' . count($lineas) . ' URL', implode("\n", $lineas)
+            . "\n\nCualquiera puede bajarlos. Bórralos (o muévelos fuera de la web) y, si es un wp-config, un .env o un .sql, cambia la contraseña de la base de datos.");
+    }
+    $this->info(count($lineas) . ' avisos nuevos.');
+})->purpose('Avisa de .env, .git, debug.log, copias de wp-config o volcados .sql descargables');
+
 // Plesk: un solo cron "* * * * * php artisan schedule:run"
 Schedule::command('queue:work --stop-when-empty --max-time=3500 --timeout=3600')->everyMinute()->withoutOverlapping(70)->runInBackground();
 Schedule::command('webminder:verificar')->hourly()->withoutOverlapping();
@@ -175,6 +211,7 @@ Schedule::command('webminder:nocturna')->dailyAt('23:00')->timezone('Europe/Madr
 // Después de la ronda: lo que siga vulnerable es lo que no se pudo actualizar solo
 Schedule::command('webminder:vulnerabilidades')->dailyAt('07:00')->timezone('Europe/Madrid')->withoutOverlapping(60)
     ->when(fn () => (bool) config('services.wordfence.clave'));
+Schedule::command('webminder:expuestos')->dailyAt('07:30')->timezone('Europe/Madrid')->withoutOverlapping(60)->runInBackground();
 // Capturas de la comparación visual: 30 días (las copias para revertir en el sitio duran 7)
 Schedule::call(fn () => \App\Webminder\Panel\Models\Ejecucion::where('created_at', '<', now()->subDays(30))->pluck('id')
     ->each(fn ($id) => \Illuminate\Support\Facades\Storage::disk('local')->deleteDirectory(\App\Webminder\Panel\Services\CapturasService::ruta($id))))->daily();
