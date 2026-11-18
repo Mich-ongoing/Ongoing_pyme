@@ -98,6 +98,22 @@ Paid (5 $/mes) no hay límite diario.
   apunta los dominios externos de los scripts de la portada. La primera vez es la referencia; un
   dominio nuevo no aprobado avisa una vez y queda en **Injerto** para aceptarlo u olvidarlo.
 
+## Fallos de seguridad conocidos (Wordfence Intelligence)
+
+- `WEBMINDER_WORDFENCE_CLAVE` en el `.env`: clave gratuita de una cuenta de wordfence.com
+  (Integrations → API key de Wordfence Intelligence). Sin ella el comando no se programa.
+- `webminder:vulnerabilidades` a las 07:00 (después de la ronda nocturna): descarga el feed `scanner`
+  (>100 MB, se lee por trozos), guarda en `storage/app/vulnerabilidades.json` solo lo que afecta a algo
+  instalado y avisa por correo, una vez por web y fallo, de lo que afecta a la versión instalada.
+  Cada ficha de web muestra la tarjeta «Fallos de seguridad conocidos». Si el feed llega vacío o roto,
+  el comando falla y se mantiene el índice anterior. Wordfence da 429 si se pide a menudo: una vez al día.
+
+## Comentarios cerrados (worker ≥ 2.12)
+
+- En **Cerrojo**, columna «Comentarios» por web y «Cerrar comentarios en todas» (en cola). El worker
+  cierra comentarios y pingbacks, oculta los publicados y corta wp-comments-post, REST, XML-RPC y
+  `wp_new_comment()` de anónimos. Cierra también las reseñas de WooCommerce.
+
 ## Pruebas
 
 - Panel: `ddev artisan test`.

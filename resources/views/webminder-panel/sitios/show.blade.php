@@ -201,6 +201,24 @@
         </div>
     </flux:card>
 
+    <!-- Fallos de seguridad conocidos (feed de Wordfence, se cruza cada mañana) -->
+    @if($vulnerabilidades_al_dia)
+        <flux:card class="bg-slate-950/60 border {{ $vulnerabilidades ? 'border-rose-800' : 'border-slate-800' }} p-6 rounded-2xl mb-8">
+            <flux:heading size="lg" class="text-slate-100 font-bold mb-4">🛡️ Fallos de seguridad conocidos</flux:heading>
+            @forelse($vulnerabilidades as $v)
+                <div class="py-2 border-b border-slate-800/60 last:border-0 text-sm">
+                    <p class="text-slate-200">{{ $v['tipo'] }} <strong>{{ $v['nombre'] }}</strong> {{ $v['version'] }}: {{ $v['titulo'] }}</p>
+                    <p class="text-xs {{ $v['arreglado'] ? 'text-amber-300' : 'text-rose-400' }}">
+                        {{ $v['arreglado'] ? 'Arreglado en la ' . implode(', ', $v['arreglado']) . ': actualízalo.' : 'Sin arreglo publicado: valora desactivarlo.' }}
+                        <a href="{{ $v['url'] }}" target="_blank" rel="noopener" class="underline text-slate-400 hover:text-slate-200">Ficha en Wordfence</a>
+                    </p>
+                </div>
+            @empty
+                <p class="text-sm text-emerald-400">Ninguno conocido para las versiones instaladas.</p>
+            @endforelse
+        </flux:card>
+    @endif
+
     <!-- Acciones de seguridad (tras un hackeo o una sospecha) -->
     @php
         $puede_acciones = version_compare($estado_actual?->datos['worker_version'] ?? '0', '2.9.0', '>=');

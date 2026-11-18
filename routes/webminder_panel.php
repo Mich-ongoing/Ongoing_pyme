@@ -98,6 +98,8 @@ Route::prefix('webminder-panel')->name('webminder-panel.')->middleware(['web', '
     Route::post('/cerrojo/{sitio}/instalar', [CerrojoController::class, 'instalar'])->name('cerrojo.instalar');
     Route::post('/cerrojo/{sitio}/permitir', [CerrojoController::class, 'permitir'])->name('cerrojo.permitir');
     Route::post('/cerrojo/{sitio}/cerrar', [CerrojoController::class, 'cerrar'])->name('cerrojo.cerrar');
+    Route::post('/cerrojo/comentarios', [CerrojoController::class, 'comentariosTodos'])->name('cerrojo.comentarios-todos');
+    Route::post('/cerrojo/{sitio}/comentarios', [CerrojoController::class, 'comentarios'])->name('cerrojo.comentarios');
     Route::post('/cerrojo/{sitio}/limpiar', [CerrojoController::class, 'limpiar'])->name('cerrojo.limpiar');
     Route::get('/cerrojo/{sitio}/usuarios', [CerrojoController::class, 'usuarios'])->name('cerrojo.usuarios');
     Route::post('/cerrojo/{sitio}/usuarios/desbloquear', [CerrojoController::class, 'desbloquear'])->name('cerrojo.desbloquear');

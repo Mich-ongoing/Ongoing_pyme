@@ -25,6 +25,12 @@ delete_option('ongoing_webminder_correo');
 delete_option('ongoing_webminder_clave_desde');
 delete_metadata('user', 0, 'webminder_clave_cambiada', '', true);
 delete_option('ongoing_webminder_update_lock');
+// Si el panel cerró los comentarios, la web vuelve a los valores por defecto que tenía
+if (is_array($comentarios = get_option('ongoing_webminder_sin_comentarios'))) {
+    update_option('default_comment_status', $comentarios['comment'] ?? 'open');
+    update_option('default_ping_status', $comentarios['ping'] ?? 'open');
+}
+delete_option('ongoing_webminder_sin_comentarios');
 
 // 1b. Log de actividad local: tabla y cron
 global $wpdb;

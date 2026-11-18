@@ -19,21 +19,27 @@
                 <p class="text-sm text-slate-200">Versión en el panel: <strong>{{ $version ?? 'ninguna' }}</strong></p>
                 <p class="text-xs text-slate-400">Va firmada con la clave del panel: una web solo la acepta si viene de aquí, y si deja de responder vuelve sola a la anterior.</p>
             </div>
-            @if($version)
-                <form method="POST" action="{{ route('webminder-panel.cerrojo.todos') }}">
+            <div class="flex flex-wrap gap-2">
+                <form method="POST" action="{{ route('webminder-panel.cerrojo.comentarios-todos') }}" onsubmit="return confirm('¿Cerrar los comentarios en todas las webs? También se ocultan los ya publicados y las reseñas de WooCommerce.')">
                     @csrf
-                    <button class="{{ $boton }} bg-indigo-600 hover:bg-indigo-500 text-white">Actualizar en todas las webs</button>
+                    <button class="{{ $boton }} bg-slate-800 hover:bg-slate-700 text-slate-200">Cerrar comentarios en todas</button>
                 </form>
-            @else
-                <p class="text-xs text-amber-300">Sube cerrojo.php a {{ config('services.cerrojo.archivo') }}</p>
-            @endif
+                @if($version)
+                    <form method="POST" action="{{ route('webminder-panel.cerrojo.todos') }}">
+                        @csrf
+                        <button class="{{ $boton }} bg-indigo-600 hover:bg-indigo-500 text-white">Actualizar en todas las webs</button>
+                    </form>
+                @else
+                    <p class="text-xs text-amber-300">Sube cerrojo.php a {{ config('services.cerrojo.archivo') }}</p>
+                @endif
+            </div>
         </flux:card>
 
         <flux:card class="bg-slate-950/60 border border-slate-800 p-0 rounded-2xl overflow-x-auto">
             <table class="w-full text-sm">
                 <thead class="text-xs text-slate-400 text-left">
                     <tr class="border-b border-slate-800">
-                        <th class="p-4">Web</th><th class="p-4">Cerrojo</th><th class="p-4">Instalar plugins</th><th class="p-4">Última revisión</th><th class="p-4"></th>
+                        <th class="p-4">Web</th><th class="p-4">Cerrojo</th><th class="p-4">Instalar plugins</th><th class="p-4">Última revisión</th><th class="p-4">Comentarios</th><th class="p-4"></th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-800/60">
@@ -93,6 +99,19 @@
                             </td>
                             <td class="p-4 {{ ($c['pending'] ?? 0) ? 'text-rose-400' : 'text-slate-400' }}">
                                 {{ $instalado ? (($c['pending'] ?? 0) ? $c['pending'] . ' hallazgos' : 'sin hallazgos') : '' }}
+                            </td>
+                            <td class="p-4">
+                                @if(!$worker || version_compare($worker, '2.12.0', '<'))
+                                    <span class="text-slate-500">necesita worker 2.12</span>
+                                @else
+                                    @php $cerrados = !empty($e->datos['comentarios_cerrados']); @endphp
+                                    <form method="POST" action="{{ route('webminder-panel.cerrojo.comentarios', $sitio) }}" class="flex items-center gap-2">
+                                        @csrf
+                                        <input type="hidden" name="cerrar" value="{{ $cerrados ? 0 : 1 }}">
+                                        <span class="{{ $cerrados ? 'text-emerald-400' : 'text-amber-300' }}">{{ $cerrados ? 'cerrados' : 'abiertos' }}</span>
+                                        <button class="{{ $boton }} bg-slate-800 hover:bg-slate-700 text-slate-200">{{ $cerrados ? 'Abrir' : 'Cerrar' }}</button>
+                                    </form>
+                                @endif
                             </td>
                             <td class="p-4">
                                 <div class="flex flex-wrap gap-2 justify-end">

@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.11.0
+ * Version:     2.12.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.11.0';
+    const VERSION = '2.12.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -86,6 +86,8 @@ class WebminderAgent {
     const OPTION_CORREO = 'ongoing_webminder_correo';
     // Quien no haya cambiado la contraseña después de esta fecha no puede entrar hasta hacerlo
     const OPTION_CLAVE_DESDE = 'ongoing_webminder_clave_desde';
+    // Comentarios cerrados desde el panel; guarda los valores por defecto que había para devolverlos al abrir
+    const OPTION_SIN_COMENTARIOS = 'ongoing_webminder_sin_comentarios';
 
     private $via_correo = null;
 
@@ -94,6 +96,9 @@ class WebminderAgent {
         add_action('admin_menu', [$this, 'add_admin_menu']);
         add_action('rest_api_init', [$this, 'register_routes']);
         add_action('init', [$this, 'load_textdomain']);
+        if (get_option(self::OPTION_SIN_COMENTARIOS)) {
+            $this->cerrar_comentarios();
+        }
         // Injerto pide aprobaciones al panel por el log de actividad (crítico = se envía al momento)
         add_filter('injerto_worker_conectado', function () {
             return get_option(self::OPTION_CLIENT_ID) && get_option(self::OPTION_CLIENT_SECRET) && get_option(self::OPTION_PANEL_URL);
@@ -602,6 +607,12 @@ class WebminderAgent {
         register_rest_route(self::API_NAMESPACE, '/sesiones', [
             'methods'             => 'POST',
             'callback'            => [$this, 'handle_sesiones'],
+            'permission_callback' => [$this, 'verify_signature']
+        ]);
+
+        register_rest_route(self::API_NAMESPACE, '/comentarios', [
+            'methods'             => 'POST',
+            'callback'            => [$this, 'handle_comentarios'],
             'permission_callback' => [$this, 'verify_signature']
         ]);
 
@@ -1123,6 +1134,47 @@ class WebminderAgent {
         }
 
         return true;
+    }
+
+    /** Cierra (cerrar: true) o vuelve a abrir los comentarios y pingbacks de toda la web. */
+    public function handle_comentarios(\WP_REST_Request $request) {
+        $cerrar = true === ($request->get_json_params()['cerrar'] ?? null);
+        $antes = get_option(self::OPTION_SIN_COMENTARIOS);
+        if ($cerrar && !$antes) {
+            update_option(self::OPTION_SIN_COMENTARIOS, ['comment' => get_option('default_comment_status'), 'ping' => get_option('default_ping_status')], true);
+            update_option('default_comment_status', 'closed');
+            update_option('default_ping_status', 'closed');
+        } elseif (!$cerrar && $antes) {
+            update_option('default_comment_status', $antes['comment'] ?? 'open');
+            update_option('default_ping_status', $antes['ping'] ?? 'open');
+            delete_option(self::OPTION_SIN_COMENTARIOS);
+        }
+        $this->purge_all_caches(); // si no, la caché seguiría sirviendo el formulario
+
+        return rest_ensure_response(['success' => true, 'cerrados' => $cerrar]);
+    }
+
+    /**
+     * Con los comentarios cerrados: ni formulario, ni los existentes, ni pingbacks. El núcleo
+     * comprueba comments_open/pings_open en wp-comments-post.php, la API REST, XML-RPC y
+     * wp-trackback.php; preprocess_comment para a los plugins que llamen a wp_new_comment().
+     */
+    private function cerrar_comentarios() {
+        add_filter('comments_open', '__return_false', PHP_INT_MAX);
+        add_filter('pings_open', '__return_false', PHP_INT_MAX);
+        add_filter('comments_array', '__return_empty_array', PHP_INT_MAX);
+        add_filter('get_comments_number', '__return_zero', PHP_INT_MAX);
+        add_filter('feed_links_show_comments_feed', '__return_false');
+        add_filter('preprocess_comment', function ($comentario) {
+            if (!current_user_can('moderate_comments')) { // los admins pueden seguir respondiendo desde wp-admin
+                wp_die('Los comentarios están cerrados.', '', ['response' => 403]);
+            }
+            return $comentario;
+        }, 0);
+        add_filter('wp_headers', function ($cabeceras) {
+            unset($cabeceras['X-Pingback']);
+            return $cabeceras;
+        });
     }
 
     /** Manda un correo de prueba por wp_mail (el mismo camino que los formularios). */
@@ -1795,6 +1847,7 @@ class WebminderAgent {
             'site_health_summary' => ($site_health = $this->run_site_health()) ? ($site_health['summary'] ?? []) : [],
             'cerrojo' => $this->cerrojo_info(),
             'correo' => get_option(self::OPTION_CORREO) ?: null,
+            'comentarios_cerrados' => (bool) get_option(self::OPTION_SIN_COMENTARIOS),
             'worker_version' => self::VERSION, // el panel lo usa para saber qué puede pedir
             // El panel vigila los scripts de la portada de las webs con Injerto
             'injerto' => defined('INJERTO_VERSION') ? ['version' => INJERTO_VERSION] : null,

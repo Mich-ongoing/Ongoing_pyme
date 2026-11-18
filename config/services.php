@@ -45,6 +45,11 @@ return [
         'clave_privada' => env('WEBMINDER_INJERTO_CLAVE'),
     ],
 
+    // Feed gratuito de fallos de Wordfence Intelligence V3 (clave de wordfence.com → Integrations)
+    'wordfence' => [
+        'clave' => env('WEBMINDER_WORDFENCE_CLAVE'),
+    ],
+
     // Cerrojo: la versión que el panel instala en las webs (se sube al desplegar; no va en git).
     'cerrojo' => [
         'archivo' => env('WEBMINDER_CERROJO_ARCHIVO', storage_path('app/cerrojo/cerrojo.php')),

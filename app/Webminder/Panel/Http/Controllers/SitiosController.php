@@ -9,6 +9,7 @@ use App\Webminder\Panel\Models\Credencial;
 use App\Webminder\Panel\Models\EventoActividad;
 use App\Webminder\Panel\Models\Cliente;
 use App\Webminder\Panel\Services\AgenteComunicacionService;
+use App\Webminder\Panel\Services\VulnerabilidadesService;
 use Illuminate\View\View;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
@@ -64,6 +65,8 @@ class SitiosController
             'estado_actual' => $estado_actual,
             'eventos' => $eventos,
             'actividad' => EventoActividad::where('sitio_id', $sitio->id)->latest('ocurrido_en')->limit(30)->get(),
+            'vulnerabilidades' => app(VulnerabilidadesService::class)->deSitio($sitio),
+            'vulnerabilidades_al_dia' => is_file(VulnerabilidadesService::indice()),
         ]);
     }
 

@@ -230,6 +230,12 @@ class AgenteComunicacionService
         return $this->hacerPeticion($sitio, 'probar-correo', ['para' => $para], null, 60);
     }
 
+    /** Cierra o abre los comentarios y pingbacks de toda la web (worker ≥ 2.12). */
+    public function comentarios(SitioWeb $sitio, bool $cerrar): array
+    {
+        return $this->hacerPeticion($sitio, 'comentarios', ['cerrar' => $cerrar], null, 60);
+    }
+
     public function activarMantenimiento(SitioWeb $sitio): array
     {
         return $this->hacerPeticion($sitio, 'maintenance-mode', ['active' => true]);

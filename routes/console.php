@@ -5,6 +5,7 @@ use App\Webminder\Panel\Services\AgenteComunicacionService;
 use App\Webminder\Panel\Services\AvisosService;
 use App\Webminder\Panel\Services\InjertoService;
 use App\Webminder\Panel\Services\RondaNocturna;
+use App\Webminder\Panel\Services\VulnerabilidadesService;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
@@ -141,11 +142,39 @@ Artisan::command('aligera:publicar {zip} {--cambios= : Qué trae esta versión}'
     $this->info("Aligera Pro {$version} publicada: las webs con licencia la verán en sus actualizaciones (en 12 h como mucho).");
 })->purpose('Publica una versión de Aligera Pro para las actualizaciones automáticas');
 
+/** Cruza el feed de Wordfence con lo instalado y avisa (una vez) de cada fallo nuevo que afecte a una web. */
+Artisan::command('webminder:vulnerabilidades', function (VulnerabilidadesService $vulns) {
+    try {
+        $this->info($vulns->actualizar() . ' fallos conocidos afectan a algo instalado en alguna versión.');
+    } catch (\Throwable $e) {
+        $this->error($e->getMessage());
+
+        return 1;
+    }
+    $lineas = [];
+    foreach (SitioWeb::where('activo', true)->orderBy('nombre')->get() as $sitio) {
+        foreach ($vulns->deSitio($sitio) as $v) {
+            if (Cache::add("watchwp-vuln-{$sitio->id}-{$v['id']}-{$v['clave']}", true, now()->addYear())) {
+                $arreglo = $v['arreglado'] ? 'arreglado en la ' . implode(', ', $v['arreglado']) : 'SIN ARREGLO publicado: valora desactivarlo';
+                $lineas[] = "{$sitio->nombre} · {$v['tipo']} {$v['nombre']} {$v['version']}\n  {$v['titulo']}\n  {$arreglo} · {$v['url']}";
+            }
+        }
+    }
+    if ($lineas) {
+        AvisosService::enviar('⚠ ' . count($lineas) . ' fallos de seguridad conocidos en tus webs', implode("\n\n", $lineas)
+            . "\n\nSi hay versión con el arreglo, actualiza desde watchWP; la ronda nocturna también lo hará.");
+    }
+    $this->info(count($lineas) . ' avisos nuevos.');
+})->purpose('Avisa de plugins, temas o núcleo con fallos de seguridad conocidos (Wordfence Intelligence)');
+
 // Plesk: un solo cron "* * * * * php artisan schedule:run"
 Schedule::command('queue:work --stop-when-empty --max-time=3500 --timeout=3600')->everyMinute()->withoutOverlapping(70)->runInBackground();
 Schedule::command('webminder:verificar')->hourly()->withoutOverlapping();
 Schedule::command('webminder:vigilar')->everyFiveMinutes()->withoutOverlapping(30)->runInBackground();
 Schedule::command('webminder:nocturna')->dailyAt('23:00')->timezone('Europe/Madrid')->withoutOverlapping(30);
+// Después de la ronda: lo que siga vulnerable es lo que no se pudo actualizar solo
+Schedule::command('webminder:vulnerabilidades')->dailyAt('07:00')->timezone('Europe/Madrid')->withoutOverlapping(60)
+    ->when(fn () => (bool) config('services.wordfence.clave'));
 // Capturas de la comparación visual: 30 días (las copias para revertir en el sitio duran 7)
 Schedule::call(fn () => \App\Webminder\Panel\Models\Ejecucion::where('created_at', '<', now()->subDays(30))->pluck('id')
     ->each(fn ($id) => \Illuminate\Support\Facades\Storage::disk('local')->deleteDirectory(\App\Webminder\Panel\Services\CapturasService::ruta($id))))->daily();

@@ -10,6 +10,7 @@ use App\Webminder\Panel\Jobs\ActualizarSitio;
 use App\Models\User;
 use App\Webminder\Panel\Models\SitioWeb;
 use App\Webminder\Panel\Services\AgenteComunicacionService;
+use App\Webminder\Panel\Services\VulnerabilidadesService;
 use App\Webminder\Panel\Services\CapturasService;
 use App\Webminder\Panel\Services\InjertoService;
 use App\Webminder\Panel\Models\InjertoSolicitud;
@@ -971,5 +972,73 @@ class WebminderPanelTest extends TestCase
         $this->actingAs(User::factory()->create())->get(route('webminder-panel.cerrojo.index'))->assertOk()
             ->assertSee('Actualizar 1.5.0')->assertSee('abierta hasta las')->assertSee('Cerrar ya')
             ->assertSee('Apartado plugins/insert-headers-and-footers')->assertSee('2 hallazgos');
+    }
+
+    public function test_cerrar_comentarios_en_todas_solo_toca_webs_con_worker_2_12_y_abiertos(): void
+    {
+        $viejo = SitioWeb::create(['cliente_id' => $this->sitio->cliente_id, 'nombre' => 'Vieja', 'url' => 'https://vieja.test/', 'activo' => true, 'estado' => 'online']);
+        EstadoSitio::create(['sitio_id' => $viejo->id, 'estado' => 'online', 'datos' => ['worker_version' => '2.11.0'], 'metricas' => [], 'codigo_http' => 200, 'tiempo_respuesta_ms' => 0]);
+        EstadoSitio::create(['sitio_id' => $this->sitio->id, 'estado' => 'online', 'datos' => ['worker_version' => '2.12.0', 'comentarios_cerrados' => false], 'metricas' => [], 'codigo_http' => 200, 'tiempo_respuesta_ms' => 0]);
+        Http::fake(fn (Request $req) => str_ends_with($req->url(), '/comentarios')
+            ? Http::response(['success' => true, 'cerrados' => true])
+            : Http::response(['success' => true, 'data' => ['worker_version' => '2.12.0', 'comentarios_cerrados' => true]]));
+        $usuario = User::factory()->create();
+
+        $this->actingAs($usuario)->get(route('webminder-panel.cerrojo.index'))->assertSee('abiertos')->assertSee('necesita worker 2.12');
+        $this->actingAs($usuario)->post(route('webminder-panel.cerrojo.comentarios-todos'))->assertSessionHas('success');
+
+        Http::assertSent(fn (Request $req) => $req->url() === 'https://acme.test/wp-json/webminder/v1/comentarios' && $req['cerrar'] === true);
+        Http::assertNotSent(fn (Request $req) => str_contains($req->url(), 'vieja.test'));
+        $this->assertTrue($this->sitio->estadoActual()->datos['comentarios_cerrados']);
+
+        // Y se pueden volver a abrir web a web
+        $this->actingAs($usuario)->post(route('webminder-panel.cerrojo.comentarios', $this->sitio), ['cerrar' => 0]);
+        Http::assertSent(fn (Request $req) => str_ends_with($req->url(), '/comentarios') && $req['cerrar'] === false);
+    }
+
+    public function test_avisa_una_vez_de_los_fallos_conocidos_que_afectan_a_la_version_instalada(): void
+    {
+        config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test', 'services.wordfence.clave' => 'wf_prueba']);
+        EstadoSitio::create(['sitio_id' => $this->sitio->id, 'estado' => 'online', 'metricas' => [], 'codigo_http' => 200, 'tiempo_respuesta_ms' => 0, 'datos' => [
+            'wp_version' => '6.8.1',
+            'plugins_list' => [['file' => 'akismet/akismet.php', 'name' => 'Akismet', 'version' => '4.9', 'author' => '', 'active' => true, 'update_available' => false, 'new_version' => null],
+                ['file' => 'hola.php', 'name' => 'Hola', 'version' => '1.0', 'author' => '', 'active' => true, 'update_available' => false, 'new_version' => null]],
+            'themes' => [['slug' => 'astra', 'name' => 'Astra', 'version' => '4.1.0']],
+        ]]);
+        $sw = fn ($tipo, $slug, $desde, $hasta, $incl, $arreglo = []) => ['type' => $tipo, 'slug' => $slug, 'patched_versions' => $arreglo,
+            'affected_versions' => ["$desde - $hasta" => ['from_version' => $desde, 'from_inclusive' => true, 'to_version' => $hasta, 'to_inclusive' => $incl]]];
+        // Títulos con llaves y comillas escapadas: el lector por trozos no debe perder la cuenta
+        $feed = json_encode([
+            'a1' => ['id' => 'a1', 'title' => 'Akismet <= 5.0 - Escalada {de} privilegios "admin" \\', 'software' => [$sw('plugin', 'akismet', '*', '5.0', true, ['5.0.1'])]],
+            'a2' => ['id' => 'a2', 'title' => 'Akismet < 4.0 - viejo', 'software' => [$sw('plugin', 'akismet', '*', '4.0', false, ['4.0'])]],
+            'a3' => ['id' => 'a3', 'title' => 'Hola <= 1.0 - XSS }}', 'software' => [$sw('plugin', 'hola', '1.0', '1.0', true)]],
+            'a4' => ['id' => 'a4', 'title' => 'Otro plugin', 'software' => [$sw('plugin', 'no-instalado', '*', '9', true)]],
+            'a5' => ['id' => 'a5', 'title' => 'WordPress 6.8 - 6.8.2 - SSRF', 'software' => [$sw('core', 'wordpress', '6.8', '6.8.2', true, ['6.8.3'])]],
+            'a6' => ['id' => 'a6', 'title' => 'Astra < 4.0', 'software' => [$sw('theme', 'astra', '*', '4.0', false, ['4.0'])]],
+        ]);
+        Http::fake(['www.wordfence.com/*' => function () use (&$feed) { return Http::response($feed); }]);
+
+        $this->artisan('webminder:vulnerabilidades')->assertSuccessful();
+        $this->artisan('webminder:vulnerabilidades')->assertSuccessful();
+
+        Http::assertSent(fn (Request $req) => $req->hasHeader('Authorization', 'Bearer wf_prueba'));
+        $correos = $this->correos();
+        $this->assertCount(1, $correos); // la segunda vuelta no repite
+        $texto = $correos[0]->getTextBody();
+        $this->assertStringContainsString('3 fallos', $correos[0]->getSubject());
+        $this->assertStringContainsString('Escalada {de} privilegios "admin"', $texto);
+        $this->assertStringContainsString('arreglado en la 5.0.1', $texto);
+        $this->assertStringContainsString('SIN ARREGLO', $texto); // Hola 1.0
+        $this->assertStringContainsString('SSRF', $texto);
+        $this->assertStringNotContainsString('viejo', $texto);
+        $this->assertStringNotContainsString('Astra', $texto);
+        $this->assertSame(['core:wordpress', 'plugin:akismet', 'plugin:hola', 'theme:astra'], collect(array_keys(json_decode(file_get_contents(VulnerabilidadesService::indice()), true)))->sort()->values()->all());
+        $this->actingAs(User::factory()->create())->get(route('webminder-panel.sitios.show', $this->sitio))->assertOk()
+            ->assertSee('Fallos de seguridad conocidos')->assertSee('Arreglado en la 5.0.1');
+
+        $feed = '<html>error</html>';
+        $this->artisan('webminder:vulnerabilidades')->assertFailed();
+        $this->assertNotEmpty(json_decode(file_get_contents(VulnerabilidadesService::indice()), true)); // sigue el de antes
+        @unlink(VulnerabilidadesService::indice());
     }
 }

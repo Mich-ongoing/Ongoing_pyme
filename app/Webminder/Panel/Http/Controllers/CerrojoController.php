@@ -4,6 +4,8 @@ namespace App\Webminder\Panel\Http\Controllers;
 
 use App\Webminder\Panel\Jobs\InstalarCerrojo;
 use App\Webminder\Panel\Models\SitioWeb;
+use App\Webminder\Panel\Services\AgenteComunicacionService;
+use App\Webminder\Panel\Services\AvisosService;
 use App\Webminder\Panel\Services\CerrojoService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -48,6 +50,39 @@ class CerrojoController
         }
 
         return back()->with('success', $n ? "Actualizando Cerrojo a la {$version} en {$n} webs. Si alguna falla, llega un aviso por correo." : "Todas las webs ya tienen Cerrojo {$version}.");
+    }
+
+    public function comentarios(Request $request, SitioWeb $sitio, AgenteComunicacionService $agente): RedirectResponse
+    {
+        $cerrar = $request->boolean('cerrar');
+        $r = $agente->comentarios($sitio, $cerrar);
+        if ($r['success']) {
+            $agente->obtenerStatus($sitio);
+        }
+
+        return $r['success'] ? back()->with('success', 'Comentarios ' . ($cerrar ? 'cerrados' : 'abiertos') . " en {$sitio->nombre}.")
+            : back()->with('error', 'La web no lo aceptó: ' . ($r['error'] ?? 'error desconocido'));
+    }
+
+    /** Cierra los comentarios en todas las webs con worker 2.12+ que aún los tengan abiertos, en cola. */
+    public function comentariosTodos(): RedirectResponse
+    {
+        $n = 0;
+        foreach (SitioWeb::where('activo', true)->get() as $sitio) {
+            $datos = $sitio->estadoActual()?->datos ?? [];
+            if (version_compare((string) ($datos['worker_version'] ?? '0'), '2.12.0', '>=') && empty($datos['comentarios_cerrados'])) {
+                $id = $sitio->id;
+                dispatch(function (AgenteComunicacionService $agente) use ($id) {
+                    $sitio = SitioWeb::with('credencial')->findOrFail($id);
+                    $r = $agente->comentarios($sitio, true);
+                    $r['success'] ? $agente->obtenerStatus($sitio)
+                        : AvisosService::enviar("No se cerraron los comentarios en {$sitio->nombre}", "{$sitio->url}: " . ($r['error'] ?? 'error desconocido'));
+                });
+                $n++;
+            }
+        }
+
+        return back()->with('success', $n ? "Cerrando los comentarios en {$n} webs. Si alguna falla, llega un aviso por correo." : 'No queda ninguna web con worker 2.12 con los comentarios abiertos.');
     }
 
     public function permitir(Request $request, SitioWeb $sitio): RedirectResponse
