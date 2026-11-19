@@ -17,6 +17,11 @@ class VulnerabilidadesService
 
     private ?array $cargado = null;
 
+    /** Fallos que no tienen arreglo ni riesgo práctico y salían en todas las webs. */
+    private const IGNORADOS = [
+        '9fda5e15-fdf9-4b67-93d3-2dbfa94aefe9', // núcleo, todas las versiones: wp_signups.activation_key en claro
+    ];
+
     public static function indice(): string
     {
         return storage_path('app/vulnerabilidades.json');
@@ -144,7 +149,7 @@ class VulnerabilidadesService
         $out = [];
         foreach ($this->componentes($sitio->estadoActual()) as $c) {
             foreach ($indice[$c['clave']] ?? [] as $v) {
-                if ($c['version'] !== '' && self::afecta($c['version'], $v['rangos'])) {
+                if ($c['version'] !== '' && !in_array($v['id'], self::IGNORADOS, true) && self::afecta($c['version'], $v['rangos'])) {
                     $out[] = $c + $v;
                 }
             }

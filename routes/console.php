@@ -160,20 +160,35 @@ Artisan::command('webminder:vulnerabilidades', function (VulnerabilidadesService
 
         return 1;
     }
-    $lineas = [];
+    // Agrupado por web y componente: una línea por cosa que actualizar, no una por fallo
+    $bloques = [];
+    $total = 0;
+    $webs = 0;
     foreach (SitioWeb::where('activo', true)->orderBy('nombre')->get() as $sitio) {
+        $porComponente = [];
         foreach ($vulns->deSitio($sitio) as $v) {
             if (Cache::add("watchwp-vuln-{$sitio->id}-{$v['id']}-{$v['clave']}", true, now()->addYear())) {
-                $arreglo = $v['arreglado'] ? 'arreglado en la ' . implode(', ', $v['arreglado']) : 'SIN ARREGLO publicado: valora desactivarlo';
-                $lineas[] = "{$sitio->nombre} · {$v['tipo']} {$v['nombre']} {$v['version']}\n  {$v['titulo']}\n  {$arreglo} · {$v['url']}";
+                $porComponente["{$v['tipo']} {$v['nombre']} {$v['version']}"][] = $v;
             }
         }
+        $webs += $porComponente ? 1 : 0;
+        foreach ($porComponente as $componente => $vs) {
+            $total += count($vs);
+            $arreglos = array_merge(...array_column($vs, 'arreglado'));
+            usort($arreglos, 'version_compare');
+            $sinArreglo = count(array_filter($vs, fn ($v) => !$v['arreglado']));
+            $accion = $arreglos ? 'actualizar a la ' . end($arreglos) . ' o superior' : 'SIN ARREGLO publicado: valora desactivarlo';
+            if ($arreglos && $sinArreglo) {
+                $accion .= " ({$sinArreglo} sin arreglo aún)";
+            }
+            $bloques[] = "{$sitio->nombre} · {$componente} → {$accion}\n" . implode("\n", array_map(fn ($v) => "  - {$v['titulo']}", $vs));
+        }
     }
-    if ($lineas) {
-        AvisosService::enviar('⚠ ' . count($lineas) . ' fallos de seguridad conocidos en tus webs', implode("\n\n", $lineas)
-            . "\n\nSi hay versión con el arreglo, actualiza desde watchWP; la ronda nocturna también lo hará.");
+    if ($bloques) {
+        AvisosService::enviar("⚠ {$total} fallos de seguridad: " . count($bloques) . " cosas que actualizar en {$webs} webs", implode("\n\n", $bloques)
+            . "\n\nEl detalle y los enlaces de Wordfence están en la ficha de cada web en watchWP. Lo que tenga versión con el arreglo lo actualiza la ronda nocturna, salvo plugins y temas de pago sin licencia activa: esos hay que subirlos a mano.");
     }
-    $this->info(count($lineas) . ' avisos nuevos.');
+    $this->info(count($bloques) . ' avisos nuevos.');
 })->purpose('Avisa de plugins, temas o núcleo con fallos de seguridad conocidos (Wordfence Intelligence)');
 
 /**

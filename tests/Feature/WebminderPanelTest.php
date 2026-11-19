@@ -1038,6 +1038,8 @@ class WebminderPanelTest extends TestCase
             'a4' => ['id' => 'a4', 'title' => 'Otro plugin', 'software' => [$sw('plugin', 'no-instalado', '*', '9', true)]],
             'a5' => ['id' => 'a5', 'title' => 'WordPress 6.8 - 6.8.2 - SSRF', 'software' => [$sw('core', 'wordpress', '6.8', '6.8.2', true, ['6.8.3'])]],
             'a6' => ['id' => 'a6', 'title' => 'Astra < 4.0', 'software' => [$sw('theme', 'astra', '*', '4.0', false, ['4.0'])]],
+            'a7' => ['id' => 'a7', 'title' => 'Akismet <= 4.9 - CSRF', 'software' => [$sw('plugin', 'akismet', '*', '4.9', true, ['4.9.1'])]],
+            '9fda5e15-fdf9-4b67-93d3-2dbfa94aefe9' => ['id' => '9fda5e15-fdf9-4b67-93d3-2dbfa94aefe9', 'title' => 'WordPress Core - All Known Versions - Cleartext', 'software' => [$sw('core', 'wordpress', '*', '*', true)]],
         ]);
         Http::fake(['www.wordfence.com/*' => function () use (&$feed) { return Http::response($feed); }]);
 
@@ -1048,9 +1050,11 @@ class WebminderPanelTest extends TestCase
         $correos = $this->correos();
         $this->assertCount(1, $correos); // la segunda vuelta no repite
         $texto = $correos[0]->getTextBody();
-        $this->assertStringContainsString('3 fallos', $correos[0]->getSubject());
+        $this->assertStringContainsString('4 fallos de seguridad: 3 cosas que actualizar en 1 webs', $correos[0]->getSubject());
         $this->assertStringContainsString('Escalada {de} privilegios "admin"', $texto);
-        $this->assertStringContainsString('arreglado en la 5.0.1', $texto);
+        $this->assertStringContainsString('Akismet 4.9 → actualizar a la 5.0.1 o superior', $texto); // dos fallos, una línea, la versión más alta
+        $this->assertStringContainsString('CSRF', $texto);
+        $this->assertStringNotContainsString('All Known Versions', $texto);
         $this->assertStringContainsString('SIN ARREGLO', $texto); // Hola 1.0
         $this->assertStringContainsString('SSRF', $texto);
         $this->assertStringNotContainsString('viejo', $texto);
