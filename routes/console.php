@@ -213,7 +213,13 @@ Artisan::command('webminder:expuestos', function () {
     ];
     $lineas = [];
     foreach (SitioWeb::where('activo', true)->orderBy('nombre')->get() as $sitio) {
-        foreach ($rutas as $ruta => $firma) {
+        // Solo lo que el worker (>= 2.13) ha visto en el disco: pedir .env o .git a ciegas a todas las webs
+        // hizo que el cortafuegos de cdmon bloqueara la IP de watchWP (20-nov). Sin worker 2.13, no se mira.
+        $enDisco = $sitio->estadoActual()?->datos['expuestos'] ?? null;
+        if (!is_array($enDisco)) {
+            continue;
+        }
+        foreach (array_intersect_key($rutas, array_flip($enDisco)) as $ruta => $firma) {
             $url = rtrim($sitio->url, '/') . '/' . $ruta;
             try {
                 // Solo los primeros KB: un debug.log puede pesar cientos de MB
@@ -242,9 +248,7 @@ Schedule::command('webminder:nocturna')->dailyAt('23:00')->timezone('Europe/Madr
 // Después de la ronda: lo que siga vulnerable es lo que no se pudo actualizar solo
 Schedule::command('webminder:vulnerabilidades')->dailyAt('07:00')->timezone('Europe/Madrid')->withoutOverlapping(60)
     ->when(fn () => (bool) config('services.wordfence.clave'));
-// Desactivado el 20-nov: pedir .env, .git o .sql a todas las webs hizo que el cortafuegos de cdmon bloqueara la IP de watchWP.
-// Se reactivará cuando el worker mire esos archivos en el disco y no haga falta pedirlos desde fuera.
-// Schedule::command('webminder:expuestos')->dailyAt('07:30')->timezone('Europe/Madrid')->withoutOverlapping(60)->runInBackground();
+Schedule::command('webminder:expuestos')->dailyAt('07:30')->timezone('Europe/Madrid')->withoutOverlapping(60)->runInBackground();
 // Capturas de la comparación visual: 30 días (las copias para revertir en el sitio duran 7)
 Schedule::call(fn () => \App\Webminder\Panel\Models\Ejecucion::where('created_at', '<', now()->subDays(30))->pluck('id')
     ->each(fn ($id) => \Illuminate\Support\Facades\Storage::disk('local')->deleteDirectory(\App\Webminder\Panel\Services\CapturasService::ruta($id))))->daily();

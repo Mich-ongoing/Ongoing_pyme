@@ -1093,8 +1093,13 @@ class WebminderPanelTest extends TestCase
             "$base/*" => Http::response('No encontrado', 404),
         ]);
 
+        $this->artisan('webminder:expuestos')->assertSuccessful(); // sin worker 2.13 no pide nada
+        Http::assertNothingSent();
+        EstadoSitio::create(['sitio_id' => $this->sitio->id, 'estado' => 'online', 'datos' => ['expuestos' => ['.git/HEAD', 'wp-config.php.bak', '.env']], 'metricas' => [], 'codigo_http' => 200, 'tiempo_respuesta_ms' => 0]);
+
         $this->artisan('webminder:expuestos')->assertSuccessful();
         $this->artisan('webminder:expuestos')->assertSuccessful();
+        Http::assertNotSent(fn ($r) => str_ends_with($r->url(), '/dump.sql')); // no está en el disco: no se pide
 
         $correos = $this->correos();
         $this->assertCount(1, $correos); // la segunda vuelta no repite

@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.12.0
+ * Version:     2.13.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.12.0';
+    const VERSION = '2.13.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -1849,6 +1849,7 @@ class WebminderAgent {
             'correo' => get_option(self::OPTION_CORREO) ?: null,
             'comentarios_cerrados' => (bool) get_option(self::OPTION_SIN_COMENTARIOS),
             'worker_version' => self::VERSION, // el panel lo usa para saber qué puede pedir
+            'expuestos' => $this->archivos_expuestos(),
             // El panel vigila los scripts de la portada de las webs con Injerto
             'injerto' => defined('INJERTO_VERSION') ? ['version' => INJERTO_VERSION] : null,
         ];
@@ -1866,6 +1867,16 @@ class WebminderAgent {
             'success' => true,
             'data' => $stats
         ]);
+    }
+
+    /**
+     * Archivos privados que existen en la carpeta de la web. El panel solo pide por HTTP los que estén aquí:
+     * pedirlos todos a ciegas hacía que cortafuegos como el de cdmon bloquearan la IP del panel.
+     */
+    private function archivos_expuestos() {
+        $rutas = ['.env', '.git/HEAD', 'wp-content/debug.log', 'debug.log', 'wp-config.php.bak', 'wp-config.php.old',
+            'wp-config.php.save', 'wp-config.php~', 'wp-config.bak', 'wp-config.txt', 'backup.sql', 'database.sql', 'dump.sql'];
+        return array_values(array_filter($rutas, function ($r) { return @is_file(ABSPATH . $r); }));
     }
 
     /**
