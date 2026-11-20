@@ -461,6 +461,19 @@ class WebminderPanelTest extends TestCase
         $this->assertNull($this->sitio->refresh()->caida_desde); // no es una caída
     }
 
+    public function test_vigilar_distingue_el_reto_anti_bots_de_litespeed(): void
+    {
+        config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);
+        Http::fake(['acme.test/*' => Http::response('<html><head><title>One moment, please...</title></head><body>Please wait while your request is being verified...</body></html>')]);
+
+        $this->artisan('webminder:vigilar');
+
+        $correos = $this->correos();
+        $this->assertCount(1, $correos);
+        $this->assertStringContainsString('verificación anti-bots', $correos[0]->getSubject());
+        $this->assertStringNotContainsString('AAAA', $correos[0]->getTextBody());
+    }
+
     public function test_vigilar_avisa_una_vez_al_dia_del_falso_cloudflare_y_no_de_una_web_normal(): void
     {
         config(['services.avisos.email' => 'yo@ongoing.test', 'mail.from.address' => 'watch@ongoing.test']);

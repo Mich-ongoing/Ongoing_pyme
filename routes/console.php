@@ -57,11 +57,18 @@ Artisan::command('webminder:vigilar', function (RondaNocturna $ronda, InjertoSer
             && (!preg_match('#/wp-(content|includes)/#', $r->body()) || ($final !== '' && $propio($final) !== $propio($sitio->url)))
             && Cache::add("watchwp-no-es-la-web-{$sitio->id}", true, now()->addDay())) {
             preg_match('#<title[^>]*>(.*?)</title>#is', $r->body(), $titulo);
-            AvisosService::enviar("⚠ {$sitio->nombre} no siempre sirve la web",
+            $titulo = trim(html_entity_decode(strip_tags($titulo[1] ?? '(sin título)')));
+            // «One moment, please...» (LiteSpeed) o «Just a moment...» (Cloudflare): reto anti-bots a watchWP, no a la web
+            $reto = preg_match('/^(one|just a) moment/i', $titulo);
+            AvisosService::enviar($reto ? "⚠ {$sitio->nombre} le pone una verificación anti-bots a watchWP" : "⚠ {$sitio->nombre} no siempre sirve la web",
                 "Al pedir {$sitio->url} llegó otra cosa en vez de la web de WordPress:\n\n  URL final: " . ($final ?: $url)
-                . "\n  Título: " . trim(html_entity_decode(strip_tags($titulo[1] ?? '(sin título)'))) . "\n\n"
-                . "Si es una página de Plesk (login o 404), lo habitual es que en el DNS de Cloudflare haya un registro AAAA (IPv6) "
-                . "que apunta a una IP en la que la web no está configurada: bórralo o asígnale esa IPv6 en Plesk. Afecta también a los visitantes.");
+                . "\n  Título: {$titulo}\n\n"
+                . ($reto
+                    ? "Es la página de «comprobando que no eres un robot» del servidor o de Cloudflare: a watchWP le ha tocado el reto, "
+                      . "pero la web suele funcionar para los visitantes. Si se repite, pide al hosting (o en Cloudflare) que deje pasar "
+                      . "la IP de watch.ongoing.es; mientras, la vigilancia de esa web no ve la portada real."
+                    : "Si es una página de Plesk (login o 404), lo habitual es que en el DNS de Cloudflare haya un registro AAAA (IPv6) "
+                      . "que apunta a una IP en la que la web no está configurada: bórralo o asígnale esa IPv6 en Plesk. Afecta también a los visitantes."));
         }
         if (!$fallo && ($motivo = CerrojoService::falsoCloudflare($r->body())) && Cache::add("watchwp-falso-cloudflare-{$sitio->id}", true, now()->addDay())) {
             AvisosService::enviar("🚨 {$sitio->nombre} muestra un falso Cloudflare a los visitantes",
