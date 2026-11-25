@@ -18,6 +18,7 @@ class FacturasDelMes
     {
         $clave = sprintf('%d-%02d', $anio, $mes);
         $conceptos = config('facturacion.conceptos', []);
+        $cuentas = config('facturacion.cuentas', []);
         $creadas = BorradorFactura::where('mes', $clave)->get();
 
         $elegidos = ContactoFactura::pluck('holded_id', 'sociedad');
@@ -39,9 +40,13 @@ class FacturasDelMes
                 // El comentario de la celda del mes manda; si no hay, la descripción por defecto de la línea
                 'descripcion' => mb_substr(($l['comentario'] ?? '') ?: ($conceptos[$l['linea']] ?? ''), 0, 255),
                 'linea' => $l['linea'],
+                'cuenta' => $cuentas[$l['linea']] ?? null,
                 'unidades' => 1,
                 'importe' => round($l['importe'], 2),
             ];
+            if (! isset($cuentas[$l['linea']])) {
+                $f['avisos'][] = "{$l['linea']} no tiene cuenta contable en config/facturacion.php: Holded la pondrá en Ventas de mercaderías.";
+            }
             if ($l['anterior'] > 0 && abs($l['anterior'] - $l['importe']) >= 0.01) {
                 $f['avisos'][] = sprintf('%s cambia respecto al mes anterior: %s → %s €.', $l['linea'], self::euros($l['anterior']), self::euros($l['importe']));
             }

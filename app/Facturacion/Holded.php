@@ -61,7 +61,9 @@ class Holded
         $r = $this->http()->post(self::API . '/invoices', [
             'contact_id' => $contactoId,
             'date' => $fecha,
-            'items' => array_map(fn ($l) => [
+            'items' => array_map(fn ($l) => array_filter([
+                'account' => $l['cuenta'] ?? null, // id del canal de venta; sin él, Holded pone Ventas de mercaderías
+            ]) + [
                 'name' => $l['concepto'],
                 'description' => $l['descripcion'],
                 'type' => 'service',

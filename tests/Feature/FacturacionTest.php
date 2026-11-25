@@ -127,6 +127,7 @@ class FacturacionTest extends TestCase
             && $r['contact_id'] === 'c-acme'
             && $r['items'][1]['price'] == 1450
             && $r['items'][1]['name'] === 'MRR Paid media'
+            && $r['items'][1]['account'] === config('facturacion.cuentas')['MRR Paid media']
             && $r['items'][1]['description'] === 'Gestión de campañas de publicidad (Paid Media)'
             && $r['items'][0]['description'] === 'Campaña de noviembre' // el comentario de la celda manda
             && $r['items'][1]['taxes'] === ['s_iva_21']

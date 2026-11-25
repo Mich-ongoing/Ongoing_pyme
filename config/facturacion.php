@@ -23,6 +23,21 @@ return [
         'Others refacturing' => 'Refacturación de gastos',
     ],
 
+    // REVENUE LINE => id del canal de venta (cuenta contable) en Holded: GET /api/v2/sales-channels.
+    // Sin cuenta Holded pone «Ventas de mercaderías» (70000000), por eso el panel avisa.
+    'cuentas' => [
+        'MRR Paid media' => '6981e397d2e4d9e6450a7b74',     // 70500002 MRR PAID MEDIA
+        'MRR Paid variables' => '6981e397d2e4d9e6450a7b75', // 70500005 MRR PAID VARIABLES
+        'MRR SEO' => '6981e397d2e4d9e6450a7b77',            // 70500004 MRR SEO
+        'MRR RRSS' => '6981e397d2e4d9e6450a7b76',           // 70500003 MRR RRSS
+        'Maintainment web' => '6981e397d2e4d9e6450a7b73',   // 70500010 MAINTAINMENT WEB
+        'Web creations' => '6981e397d2e4d9e6450a7b7e',      // 70500011 WEB CREATIONS
+        'ONE- OFF SEO' => '6981e397d2e4d9e6450a7b7b',       // 70500007 ONE-OFF SEO
+        'ONE-OFF RRSS' => '6981e397d2e4d9e6450a7b78',       // 70500012 ONE OFF RRSS
+        'ONE-OFF Paid Media' => '6981e397d2e4d9e6450a7b7a', // 70500008 ONE-OFF PAID VARIABLES
+        'Others refacturing' => '6981e397d2e4d9e6450a7b7c', // 70500009 OTHERS REFACTURING
+    ],
+
     // Líneas que no se facturan (histórico o vacías)
     'ignorar' => ['Invoiced 2024', '-', ''],
     // Líneas que contienen este texto tampoco: el Kit Digital se factura fuera de aquí
