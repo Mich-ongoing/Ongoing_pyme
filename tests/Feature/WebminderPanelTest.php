@@ -385,6 +385,19 @@ class WebminderPanelTest extends TestCase
         Http::assertSentCount(2);
     }
 
+    public function test_lee_el_json_aunque_un_malware_meta_html_delante(): void
+    {
+        // Como bleyabogados.es: el cf-boot se imprime delante de todas las respuestas, también de la API
+        $basura = "<!-- cf-boot -->\n<style>html{x:1}</style>\n<script>(function(){if(a<b){c()}})();</script>\n<!-- /cf-boot -->\n";
+        Http::fake(['acme.test/*' => Http::response($basura . json_encode(['success' => true, 'data' => ['wp_version' => '7.1.5', 'html' => '</script>']]), 200)]);
+
+        $r = $this->agente()->obtenerStatus($this->sitio);
+        $this->assertTrue($r['success']);
+        $this->assertTrue($r['html_inyectado']);
+        $this->assertSame('</script>', $r['data']['html']);
+        $this->assertNull(\App\Webminder\Panel\Services\AgenteComunicacionService::json('<html>Plesk 404</html>'));
+    }
+
     public function test_una_respuesta_de_wordpress_no_se_repite_aunque_sea_un_error(): void
     {
         Http::fake(['acme.test/*' => Http::response(['code' => 'rest_no_route', 'message' => 'No hay ruta'], 404)]);

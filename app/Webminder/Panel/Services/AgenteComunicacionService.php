@@ -62,14 +62,20 @@ class AgenteComunicacionService
             }
             // Una página HTML con 404/502/52x en la API es que la petición no llegó a WordPress (en ccmir-mir.com
             // y delvy.es, 1 de cada 3 iba a una IPv6 del servidor sin la web): repetirla no aplica nada dos veces.
-            if ($intento >= 3 || $response->json() !== null || !in_array($response->status(), [404, 502, 520, 521, 522, 523], true)) {
+            if ($intento >= 3 || self::json($response->body()) !== null || !in_array($response->status(), [404, 502, 520, 521, 522, 523], true)) {
                 break;
             }
             Sleep::for(3)->seconds();
         }
 
         $credencial->registrarUso();
-        $data = self::normalizar($response->json(), $response->status());
+        $json = self::json($response->body(), $inyectado);
+        $data = self::normalizar($json, $response->status());
+        if ($inyectado) {
+            // El JSON llegó, pero con HTML delante: lo hace un malware que imprime en todas las respuestas (cf-boot en bleyabogados.es)
+            $data['html_inyectado'] = true;
+            $auditar && EventoAuditoria::registrarError('webminder_html_inyectado', "{$sitio->nombre} mete HTML delante de la API", 'Posible malware (falso Cloudflare / cf-boot): revisa el sitio', $sitio->id, ['inicio' => Str::limit($response->body(), 200)]);
+        }
 
         $resumen = ['http' => $response->status(), 'mensaje' => $data['message'] ?? $data['error'] ?? null];
         if (!$auditar) {
@@ -145,6 +151,25 @@ class AgenteComunicacionService
         return ['success' => false, 'error' => "Sin conexión: el sitio no terminó {$endpoint} en {$limite} s. Revisa el sitio antes de seguir."];
     }
 
+    /**
+     * JSON del cuerpo; si viene con HTML delante (malware que imprime en todas las respuestas),
+     * el JSON que queda tras el último </script> o comentario. El JSON de WordPress escapa
+     * "</" como "<\/", así que ese corte nunca cae dentro del JSON.
+     */
+    public static function json(string $cuerpo, ?bool &$inyectado = false): ?array
+    {
+        $inyectado = false;
+        $json = json_decode($cuerpo, true);
+        if (is_array($json) || !str_starts_with(ltrim($cuerpo), '<')) {
+            return is_array($json) ? $json : null;
+        }
+        $resto = preg_replace('~^.*(?:</script>|-->)\s*~s', '', $cuerpo);
+        $json = json_decode($resto, true);
+        $inyectado = is_array($json);
+
+        return $inyectado ? $json : null;
+    }
+
     private static function sinRespuesta(array $r): bool
     {
         return Str::startsWith((string) ($r['error'] ?? ''), ['Sin conexión', 'Respuesta no válida']);
@@ -210,7 +235,8 @@ class AgenteComunicacionService
     public function ping(SitioWeb $sitio): bool
     {
         try {
-            $json = Http::timeout(10)->get(rtrim($sitio->url, '/') . '/wp-json' . self::API . 'ping')->json();
+            $json = Http::timeout(10)->get(rtrim($sitio->url, '/') . '/wp-json' . self::API . 'ping')->body();
+            $json = self::json($json);
 
             return ($json['status'] ?? '') === 'ok';
         } catch (ConnectionException) {
