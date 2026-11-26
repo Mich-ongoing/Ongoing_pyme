@@ -81,7 +81,7 @@ class FacturacionController extends Controller
                     $fallos[] = "{$sociedad}: ya no está lista para crear.";
                     continue;
                 }
-                if (isset($usados[$f['contacto']])) {
+                if (! $f['por_cliente'] && isset($usados[$f['contacto']])) {
                     $fallos[] = "{$sociedad}: ya se ha creado en este envío un borrador para el mismo contacto de Holded.";
                     continue;
                 }

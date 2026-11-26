@@ -295,4 +295,33 @@ class FacturacionTest extends TestCase
         $this->actingAs($u)->post('/facturacion/contacto', ['mes' => '2026-11', 'quitar' => 'ACME, S.L.']);
         $this->assertSame([[null, 'c-beta2']], $C::get()->map(fn ($c) => [$c->mes, $c->holded_id])->all());
     }
+
+    public function test_algunas_sociedades_se_facturan_por_separado_por_cliente(): void
+    {
+        $this->holded();
+        $u = User::factory()->create(['role' => 'facturacion']);
+        config(['facturacion.separar_por_cliente' => ['Pixel Comunicació S.L.']]);
+        $filas = self::FILAS;
+        $filas[3][2] = $filas[4][2] = 'PIXEL COMUNICACIO, SL'; // Acme y Beta, misma sociedad: dos facturas
+        $filas[6][2] = 'Pixel Comunicació S.L.';
+        $this->app->instance(HojaFacturacion::class, new class($filas) extends HojaFacturacion {
+            public function __construct(private array $f) {}
+
+            public function filas(): array
+            {
+                return $this->f;
+            }
+        });
+        // Las dos se buscan en Holded por la sociedad: el mismo contacto
+        \App\Facturacion\ContactoFactura::create(['sociedad' => 'PIXEL COMUNICACIO, SL · Acme', 'holded_id' => 'c-acme']);
+        \App\Facturacion\ContactoFactura::create(['sociedad' => 'Pixel Comunicació S.L. · Beta', 'holded_id' => 'c-acme']);
+
+        $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertSee('PIXEL COMUNICACIO, SL · Acme')->assertSee('Pixel Comunicació S.L. · Beta')
+            ->assertDontSee('va al mismo contacto de Holded');
+        $this->actingAs($u)->post('/facturacion/crear', ['mes' => '2026-11', 'sociedades' => ['PIXEL COMUNICACIO, SL · Acme', 'Pixel Comunicació S.L. · Beta']])
+            ->assertSessionMissing('error');
+
+        $this->assertEquals(['PIXEL COMUNICACIO, SL · Acme' => 2250, 'Pixel Comunicació S.L. · Beta' => 167], BorradorFactura::pluck('total', 'sociedad')->all());
+        $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertSee('Borrador en Holded')->assertDontSee('Lista para crear');
+    }
 }

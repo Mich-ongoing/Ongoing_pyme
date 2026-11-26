@@ -42,4 +42,7 @@ return [
     'ignorar' => ['Invoiced 2024', '-', ''],
     // Líneas que contienen este texto tampoco: el Kit Digital se factura fuera de aquí
     'ignorar_si_contiene' => ['Kids Digitales'],
+
+    // Sociedades (SL NAME) con una factura por cada CLIENT NAME en vez de una sola; da igual mayúsculas, tildes y puntos
+    'separar_por_cliente' => ['Dreiblau SL', 'B-BRUCE S.L.', 'Pixel Comunicació S.L.'],
 ];

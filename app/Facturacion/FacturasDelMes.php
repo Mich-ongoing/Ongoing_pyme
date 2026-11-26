@@ -28,12 +28,19 @@ class FacturasDelMes
         $textos = TextoFactura::where('anio', $anio)->pluck('texto', 'sociedad');
         $etiquetas = Holded::etiquetas($contactos ?? []);
 
+        $separar = array_map([Holded::class, 'normalizar'], config('facturacion.separar_por_cliente', []));
+
         $facturas = [];
         foreach ($lineas as $l) {
             // Sin SL NAME (vacío o #N/A del BUSCARV) se agrupa por cliente para no juntar clientes distintos
             $sinSociedad = $l['sociedad'] === '' || str_starts_with($l['sociedad'], '#');
-            $f = &$facturas[$sinSociedad ? $l['cliente'] : $l['sociedad']];
-            $f['sociedad'] ??= $sinSociedad ? $l['cliente'] : $l['sociedad'];
+            // Algunas sociedades llevan una factura por cliente: «Sociedad · Cliente»
+            $porCliente = ! $sinSociedad && in_array(Holded::normalizar($l['sociedad']), $separar, true);
+            $grupo = $sinSociedad ? $l['cliente'] : ($porCliente ? "{$l['sociedad']} · {$l['cliente']}" : $l['sociedad']);
+            $f = &$facturas[$grupo];
+            $f['sociedad'] ??= $grupo;
+            $f['nombre_fiscal'] ??= $sinSociedad ? $l['cliente'] : $l['sociedad']; // con el que se busca en Holded
+            $f['por_cliente'] ??= $porCliente;
             if ($sinSociedad) {
                 $f['avisos'][] = 'La hoja no tiene sociedad (SL NAME): se busca por el nombre del cliente.';
             }
@@ -70,7 +77,8 @@ class FacturasDelMes
             $f['borrador'] = $creadas->firstWhere('sociedad', $sociedad);
             if (! $f['borrador'] && $contactos !== null) {
                 self::contacto($f, $contactos, $etiquetas, $elegidos[$sociedad] ?? null);
-                $f['borrador'] = $f['contacto'] ? $creadas->firstWhere('contacto_id', $f['contacto']) : null;
+                // Por cliente: varias facturas al mismo contacto son lo normal
+                $f['borrador'] = $f['contacto'] && ! $f['por_cliente'] ? $creadas->firstWhere('contacto_id', $f['contacto']) : null;
                 if ($f['borrador']) {
                     $f['avisos'][] = "Este mes ya hay un borrador para este contacto de Holded (se creó como «{$f['borrador']->sociedad}»).";
                 }
@@ -86,9 +94,9 @@ class FacturasDelMes
         unset($f);
 
         // Dos filas de la hoja hacia el mismo contacto: se avisa, y al crear solo sale la primera
-        $porContacto = array_count_values(array_filter(array_map(fn ($f) => $f['estado'] === self::LISTA ? $f['contacto'] : null, $facturas)));
+        $porContacto = array_count_values(array_filter(array_map(fn ($f) => $f['estado'] === self::LISTA && ! $f['por_cliente'] ? $f['contacto'] : null, $facturas)));
         foreach ($facturas as &$f) {
-            if ($f['estado'] === self::LISTA && $porContacto[$f['contacto']] > 1) {
+            if ($f['estado'] === self::LISTA && ($porContacto[$f['contacto']] ?? 0) > 1) {
                 $f['avisos'][] = 'Otra factura de este mes va al mismo contacto de Holded: solo se creará una.';
             }
         }
@@ -107,14 +115,14 @@ class FacturasDelMes
 
             return;
         }
-        $encontrados = $contactos[Holded::normalizar($f['sociedad'])] ?? [];
+        $encontrados = $contactos[Holded::normalizar($f['nombre_fiscal'])] ?? [];
         if (count($encontrados) === 1) {
             [$f['contacto'], $f['contacto_nombre'], $f['estado']] = [array_key_first($encontrados), reset($encontrados), self::LISTA];
         } elseif ($encontrados) {
             $f['avisos'][] = 'Hay varios contactos con este nombre en Holded: elige cuál.';
             $f['opciones'] = $encontrados;
         } else {
-            $f['opciones'] = self::parecidos(array_merge([$f['sociedad']], $f['clientes']), $contactos);
+            $f['opciones'] = self::parecidos(array_merge([$f['nombre_fiscal']], $f['clientes']), $contactos);
             $f['avisos'][] = $f['opciones'] ? 'No hay ningún contacto con este nombre en Holded. ¿Quisiste decir…?' : 'No hay ningún contacto con este nombre ni parecido en Holded: búscalo abajo o créalo allí y pulsa Actualizar.';
         }
         if ($elegido) {
