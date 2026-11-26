@@ -21,7 +21,10 @@ class FacturasDelMes
         $cuentas = config('facturacion.cuentas', []);
         $creadas = BorradorFactura::where('mes', $clave)->get();
 
-        $elegidos = ContactoFactura::pluck('holded_id', 'sociedad');
+        // El elegido solo para este mes manda sobre el de siempre (pluck: el último gana)
+        $elegidos = ContactoFactura::where(fn ($q) => $q->whereNull('mes')->orWhere('mes', $clave))->orderByRaw('mes is null desc')->get();
+        $soloEsteMes = $elegidos->whereNotNull('mes')->pluck('sociedad')->flip();
+        $elegidos = $elegidos->pluck('holded_id', 'sociedad');
         $textos = TextoFactura::where('anio', $anio)->pluck('texto', 'sociedad');
         $etiquetas = Holded::etiquetas($contactos ?? []);
 
@@ -59,6 +62,7 @@ class FacturasDelMes
             $f['avisos'] = array_values(array_unique($f['avisos']));
             $f['total'] = round(array_sum(array_column($f['lineas'], 'importe')), 2);
             [$f['contacto'], $f['contacto_nombre'], $f['manual'], $f['opciones']] = [null, null, false, []];
+            $f['solo_este_mes'] = isset($soloEsteMes[$sociedad]);
             // Texto del documento: el guardado para todo el año, si lo hay
             [$f['texto'], $f['repetir']] = [$textos[$sociedad] ?? '', isset($textos[$sociedad])];
             $f['estado'] = self::SIN_CONTACTO;

@@ -8,5 +8,5 @@ class ContactoFactura extends Model
 {
     protected $table = 'facturacion_contactos';
 
-    protected $fillable = ['sociedad', 'holded_id'];
+    protected $fillable = ['sociedad', 'mes', 'holded_id'];
 }

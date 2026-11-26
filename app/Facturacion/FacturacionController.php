@@ -141,7 +141,7 @@ class FacturacionController extends Controller
         return $fallos ? $volver->with('error', implode("\n", $fallos)) : $volver;
     }
 
-    /** Guarda (o quita) el contacto de Holded elegido a mano para una sociedad; vale para todos los meses. */
+    /** Guarda (o quita) el contacto de Holded elegido a mano para una sociedad: para siempre con «Recordar siempre», si no solo ese mes. */
     public function contacto(Request $request, Holded $holded): RedirectResponse
     {
         $datos = $request->validate([
@@ -150,11 +150,14 @@ class FacturacionController extends Controller
             'quitar' => ['nullable', 'string'],
             'contacto' => ['nullable', 'array'],
             'buscar' => ['nullable', 'array'],
+            'recordar' => ['nullable', 'array'],
         ]);
         $volver = redirect()->route('facturacion.index', ['mes' => $datos['mes']])->withInput(); // no se pierden los textos editados
 
         if (isset($datos['quitar'])) {
-            ContactoFactura::where('sociedad', $datos['quitar'])->delete();
+            // Primero la elección de este mes; si no hay, la de siempre
+            ContactoFactura::where('sociedad', $datos['quitar'])->where(fn ($q) => $q->whereNull('mes')->orWhere('mes', $datos['mes']))
+                ->orderByRaw('mes is null')->first()?->delete();
 
             return $volver;
         }
@@ -175,9 +178,15 @@ class FacturacionController extends Controller
         if (! $id || ! isset($etiquetas[$id])) {
             return $volver->with('error', "{$sociedad}: elige uno de los contactos.");
         }
-        ContactoFactura::updateOrCreate(['sociedad' => $sociedad], ['holded_id' => $id]);
+        if (! empty($datos['recordar'][$sociedad])) {
+            ContactoFactura::where(['sociedad' => $sociedad, 'mes' => $datos['mes']])->delete();
+            ContactoFactura::updateOrCreate(['sociedad' => $sociedad, 'mes' => null], ['holded_id' => $id]);
 
-        return $volver->with('success', "{$sociedad}: contacto guardado. Se usará también los próximos meses.");
+            return $volver->with('success', "{$sociedad}: contacto guardado. Se usará también los próximos meses.");
+        }
+        ContactoFactura::updateOrCreate(['sociedad' => $sociedad, 'mes' => $datos['mes']], ['holded_id' => $id]);
+
+        return $volver->with('success', "{$sociedad}: contacto cambiado solo para este mes.");
     }
 
     /** «2026-11» → [2026, 11]; sin mes, el actual. */

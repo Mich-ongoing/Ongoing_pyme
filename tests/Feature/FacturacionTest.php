@@ -267,4 +267,32 @@ class FacturacionTest extends TestCase
         Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/invoices') && $r['body'] === 'Solo noviembre');
         $this->assertSame(0, \App\Facturacion\TextoFactura::count());
     }
+
+    public function test_cambiar_contacto_ya_asignado_solo_este_mes_o_siempre(): void
+    {
+        $this->holded();
+        $u = User::factory()->create(['role' => 'facturacion']);
+        $C = \App\Facturacion\ContactoFactura::class;
+
+        // Acme sale sola (c-acme) pero se puede cambiar
+        $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertSee('Cambiar contacto')->assertSee('name="recordar[ACME, S.L.]"', false);
+
+        // Sin «Recordar siempre»: solo noviembre
+        $this->actingAs($u)->post('/facturacion/contacto', ['mes' => '2026-11', 'sociedad' => 'ACME, S.L.', 'buscar' => ['ACME, S.L.' => 'Gamma Studio SL']])
+            ->assertSessionHas('success', fn ($m) => str_contains($m, 'solo para este mes'));
+        $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertSee('solo para este mes');
+        $octubre = \App\Facturacion\FacturasDelMes::preparar(HojaFacturacion::lineas(self::FILAS, 2026, 10), app(Holded::class)->contactosPorNombre(), 2026, 10);
+        $this->assertSame('c-acme', $octubre['ACME, S.L.']['contacto']); // otro mes sigue con el automático
+
+        // Con «Recordar siempre»: todos los meses, y quita la de este mes
+        $this->actingAs($u)->post('/facturacion/contacto', ['mes' => '2026-11', 'sociedad' => 'ACME, S.L.', 'buscar' => ['ACME, S.L.' => 'Beta Serveis SL · B222'], 'recordar' => ['ACME, S.L.' => '1']]);
+        $this->assertSame([[null, 'c-beta2']], $C::get()->map(fn ($c) => [$c->mes, $c->holded_id])->all());
+
+        // Una de este mes manda sobre la de siempre; «Quitar elección» quita primero la del mes
+        $this->actingAs($u)->post('/facturacion/contacto', ['mes' => '2026-11', 'sociedad' => 'ACME, S.L.', 'buscar' => ['ACME, S.L.' => 'Gamma Studio SL']]);
+        $this->actingAs($u)->post('/facturacion/crear', ['mes' => '2026-11', 'solo' => 'ACME, S.L.']);
+        Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/invoices') && $r['contact_id'] === 'c-gamma');
+        $this->actingAs($u)->post('/facturacion/contacto', ['mes' => '2026-11', 'quitar' => 'ACME, S.L.']);
+        $this->assertSame([[null, 'c-beta2']], $C::get()->map(fn ($c) => [$c->mes, $c->holded_id])->all());
+    }
 }
