@@ -56,9 +56,12 @@ class Holded
     }
 
     /** Crea la factura sin aprobar (borrador) y devuelve su id. El importe de cada línea es su total: precio = importe / unidades. */
-    public function crearBorrador(string $contactoId, string $fecha, array $lineas): string
+    public function crearBorrador(string $contactoId, string $fecha, array $lineas, string $texto = ''): string
     {
-        $r = $this->http()->post(self::API . '/invoices', [
+        $r = $this->http()->post(self::API . '/invoices', array_filter([
+            // «Añadir texto en el documento»: Holded lo imprime como HTML
+            'body' => $texto !== '' ? nl2br(e($texto), false) : null,
+        ]) + [
             'contact_id' => $contactoId,
             'date' => $fecha,
             'items' => array_map(fn ($l) => array_filter([

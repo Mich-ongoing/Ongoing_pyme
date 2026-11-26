@@ -115,6 +115,21 @@
                                     </li>
                                 @endforeach
                             </ul>
+                            @if ($f['estado'] === F::CREADA)
+                                @if ($f['borrador']->texto)
+                                    <p class="mt-3 text-sm text-neutral-500 whitespace-pre-line">{{ $f['borrador']->texto }}</p>
+                                @endif
+                            @else
+                                {{-- «Añadir texto en el documento» de Holded --}}
+                                <div class="mt-3">
+                                    <textarea name="textos[{{ $k = F::clave($f['sociedad']) }}]" rows="2" maxlength="2000" placeholder="Texto en el documento (p. ej. Orden de compra: PO260199)" aria-label="Texto en el documento de {{ $f['sociedad'] }}"
+                                        class="w-full px-3 py-2 rounded-lg border border-neutral-200 bg-white text-sm focus:border-neutral-400 focus:outline-none">{{ old("textos.$k", $f['texto']) }}</textarea>
+                                    <label class="mt-1 flex items-center gap-2 text-xs text-neutral-500">
+                                        <input type="checkbox" name="repetir[{{ $k }}]" value="1" class="accent-neutral-900" @checked(old("repetir.$k", old('mes') ? false : $f['repetir']))>
+                                        Repetir este texto todo {{ $anio }}
+                                    </label>
+                                </div>
+                            @endif
                             @if ($f['avisos'])
                                 <ul class="mt-3 space-y-1 text-xs text-neutral-900">
                                     @foreach ($f['avisos'] as $a)
@@ -161,7 +176,7 @@
                     </div>
                 @endforeach
             </div>
-            <p class="mt-4 text-xs text-neutral-500">Puedes cambiar la descripción y las unidades de cada línea; el total de cada línea sale siempre de la hoja (más unidades = menor precio por unidad). Importes sin IVA; se añade el IVA del 21 %. Los borradores se revisan, aprueban y envían en Holded. La hoja no se modifica.</p>
+            <p class="mt-4 text-xs text-neutral-500">Puedes cambiar la descripción y las unidades de cada línea, y añadir un texto al documento («Repetir todo el año» lo deja puesto en las facturas de esa sociedad hasta diciembre); el total de cada línea sale siempre de la hoja (más unidades = menor precio por unidad). Importes sin IVA; se añade el IVA del 21 %. Los borradores se revisan, aprueban y envían en Holded. La hoja no se modifica.</p>
         </form>
         <datalist id="holded-contactos">
             @foreach ($contactos as $nombre)

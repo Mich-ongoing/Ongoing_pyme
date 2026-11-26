@@ -22,6 +22,7 @@ class FacturasDelMes
         $creadas = BorradorFactura::where('mes', $clave)->get();
 
         $elegidos = ContactoFactura::pluck('holded_id', 'sociedad');
+        $textos = TextoFactura::where('anio', $anio)->pluck('texto', 'sociedad');
         $etiquetas = Holded::etiquetas($contactos ?? []);
 
         $facturas = [];
@@ -58,6 +59,8 @@ class FacturasDelMes
             $f['avisos'] = array_values(array_unique($f['avisos']));
             $f['total'] = round(array_sum(array_column($f['lineas'], 'importe')), 2);
             [$f['contacto'], $f['contacto_nombre'], $f['manual'], $f['opciones']] = [null, null, false, []];
+            // Texto del documento: el guardado para todo el año, si lo hay
+            [$f['texto'], $f['repetir']] = [$textos[$sociedad] ?? '', isset($textos[$sociedad])];
             $f['estado'] = self::SIN_CONTACTO;
             // Ya hecha este mes: por la sociedad o, si en la hoja cambió el nombre, por el contacto de Holded
             $f['borrador'] = $creadas->firstWhere('sociedad', $sociedad);

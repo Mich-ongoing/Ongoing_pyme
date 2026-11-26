@@ -55,6 +55,9 @@ class FacturacionController extends Controller
             'descripciones' => ['nullable', 'array'],
             'descripciones.*' => ['array'],
             'descripciones.*.*' => ['nullable', 'string', 'max:255'],
+            'textos' => ['nullable', 'array'],
+            'textos.*' => ['nullable', 'string', 'max:2000'],
+            'repetir' => ['nullable', 'array'],
         ], ['sociedades.required_without' => 'Marca al menos una factura.']);
         $sociedades = isset($datos['solo']) ? [$datos['solo']] : $datos['sociedades'];
         [$anio, $mes] = $this->mes($datos['mes']);
@@ -99,8 +102,11 @@ class FacturacionController extends Controller
                     $fallos[] = "{$sociedad}: {$reparto}";
                     continue;
                 }
+                // Sin el campo en el envío se usa el guardado para el año (vacío llega como null: no vale ??)
+                $conTexto = array_key_exists($k, $datos['textos'] ?? []);
+                $texto = trim(str_replace("\r\n", "\n", (string) ($conTexto ? $datos['textos'][$k] : $f['texto'])));
                 try {
-                    $id = $holded->crearBorrador($f['contacto'], now('Europe/Madrid')->toDateString(), $f['lineas']);
+                    $id = $holded->crearBorrador($f['contacto'], now('Europe/Madrid')->toDateString(), $f['lineas'], $texto);
                     BorradorFactura::create([
                         'mes' => $datos['mes'],
                         'sociedad' => $sociedad,
@@ -108,9 +114,16 @@ class FacturacionController extends Controller
                         'holded_id' => $id,
                         'total' => $f['total'],
                         'lineas' => $f['lineas'],
+                        'texto' => $texto !== '' ? $texto : null,
                         'user_id' => $request->user()->id,
                     ]);
                     $usados[$f['contacto']] = true;
+                    // «Repetir todo el año» marcado: se guarda para los demás meses de ese año; desmarcado, deja de repetirse
+                    if ($conTexto && ! empty($datos['repetir'][$k]) && $texto !== '') {
+                        TextoFactura::updateOrCreate(['sociedad' => $sociedad, 'anio' => $anio], ['texto' => $texto]);
+                    } elseif ($conTexto) {
+                        TextoFactura::where(['sociedad' => $sociedad, 'anio' => $anio])->delete();
+                    }
                     $creadas++;
                 } catch (Throwable $e) {
                     Log::warning('Facturación: no se pudo crear el borrador', ['sociedad' => $sociedad, 'error' => $e->getMessage()]);

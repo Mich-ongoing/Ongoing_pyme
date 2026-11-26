@@ -242,4 +242,29 @@ class FacturacionTest extends TestCase
         $this->assertSame(2250.0, BorradorFactura::sole()->total);
         $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertSee('2 × 725,00 €');
     }
+
+    public function test_texto_en_el_documento_y_repetirlo_todo_el_anio(): void
+    {
+        $this->holded();
+        $u = User::factory()->create(['role' => 'facturacion']);
+        $k = \App\Facturacion\FacturasDelMes::clave('ACME, S.L.');
+
+        $this->actingAs($u)->post('/facturacion/crear', [
+            'mes' => '2026-10', 'solo' => 'ACME, S.L.',
+            'textos' => [$k => "Orden de compra: PO260199\r\n<b>x</b>"], 'repetir' => [$k => '1'],
+        ])->assertSessionMissing('error');
+
+        Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/invoices')
+            && $r['body'] === 'Orden de compra: PO260199<br>' . "\n" . '&lt;b&gt;x&lt;/b&gt;');
+        $this->assertSame("Orden de compra: PO260199\n<b>x</b>", BorradorFactura::sole()->texto);
+
+        // Noviembre ya lo trae puesto y marcado; solo vale para 2026
+        $this->actingAs($u)->get('/facturacion?mes=2026-11')->assertSee('Orden de compra: PO260199')->assertSee('name="repetir['.$k.']" value="1" class="accent-neutral-900" checked', false);
+        $this->assertSame([2026], \App\Facturacion\TextoFactura::pluck('anio')->all());
+
+        // Desmarcado: se manda ese mes pero deja de repetirse
+        $this->actingAs($u)->post('/facturacion/crear', ['mes' => '2026-11', 'solo' => 'ACME, S.L.', 'textos' => [$k => 'Solo noviembre']]);
+        Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/invoices') && $r['body'] === 'Solo noviembre');
+        $this->assertSame(0, \App\Facturacion\TextoFactura::count());
+    }
 }
