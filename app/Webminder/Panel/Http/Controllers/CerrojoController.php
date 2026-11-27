@@ -133,6 +133,13 @@ class CerrojoController
         return $this->responder(fn () => $this->cerrojo->autorizarAdmin($sitio, $login), "«{$login}» es administrador de confianza: Cerrojo ya no lo degrada.");
     }
 
+    public function restaurar(Request $request, SitioWeb $sitio): RedirectResponse
+    {
+        $plugin = $request->validate(['plugin' => ['required', 'string', 'max:200']])['plugin'];
+
+        return $this->responder(fn () => $this->cerrojo->restaurar($sitio, $plugin), "{$plugin} devuelto en {$sitio->nombre}: Cerrojo ya confía en él. Si no está activo, actívalo en Plugins.");
+    }
+
     private function responder(callable $accion, string $hecho): RedirectResponse
     {
         try {

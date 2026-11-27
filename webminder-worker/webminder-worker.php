@@ -3,7 +3,7 @@
  * Plugin Name: Ongoing - Mantenimiento Web
  * Plugin URI:  https://ongoing.es
  * Description: Este plugin permite la gestión eficiente y segura del servicio de mantenimiento web prestado por ONGOING DIGITAL SL a su sitio web según los servicios contratados.
- * Version:     2.13.0
+ * Version:     2.14.0
  * Author:      ONGOING DIGITAL SL
  * Author URI:  https://ongoing.es
  * License:     GPL2
@@ -29,7 +29,7 @@ define('ONGOING_WEBMINDER_LOADED', true);
 
 class WebminderAgent {
 
-    const VERSION = '2.13.0';
+    const VERSION = '2.14.0';
     const API_NAMESPACE = 'webminder/v1';
     const TEXT_DOMAIN = 'ongoing-webminder';
     const DB_CLEAN_MAX_POSTS = 500; // tope de posts borrados por request (evita timeout/WSOD)
@@ -989,6 +989,16 @@ class WebminderAgent {
         }
         if (in_array($accion, ['usuarios', 'desbloquear', 'admin'], true)) {
             return $this->cerrojo_usuarios($accion, $p);
+        }
+        if ($accion === 'restaurar') {
+            if (!function_exists('cerrojo_restaurar_plugin')) {
+                return new \WP_Error('no_cerrojo', 'Devolver plugins apartados necesita Cerrojo 1.9.4: actualízalo primero.', ['status' => 404]);
+            }
+            // La firma del panel la comprueba Cerrojo: con solo el secreto de este sitio no se cuela un plugin.
+            $r = cerrojo_restaurar_plugin((string) ($p['plugin'] ?? ''), (int) ($p['hasta'] ?? 0), (string) ($p['firma'] ?? ''));
+            return $r === true
+                ? rest_ensure_response(['success' => true, 'cerrojo' => $this->cerrojo_info()])
+                : new \WP_Error('restaurar', $r, ['status' => 403]);
         }
         return new \WP_Error('accion', 'Acción de Cerrojo desconocida.', ['status' => 400]);
     }

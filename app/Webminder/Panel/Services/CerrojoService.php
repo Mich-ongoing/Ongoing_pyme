@@ -74,6 +74,26 @@ class CerrojoService
         return 'cerrojo|admin|' . strtolower($host) . '|' . $login . '|' . $hasta;
     }
 
+    /** Mismo formato que cerrojo_mensaje_restaurar() en el plugin. */
+    public static function mensajeRestaurar(string $host, string $plugin, int $hasta): string
+    {
+        return 'cerrojo|restaurar|' . strtolower($host) . '|' . $plugin . '|' . $hasta;
+    }
+
+    /** Devuelve un plugin apartado por error y lo da por conocido (Cerrojo 1.9.4 y worker 2.14). Firmado: añade código a la web. */
+    public function restaurar(SitioWeb $sitio, string $plugin): array
+    {
+        $host = self::estado($sitio)['host'] ?? (string) parse_url($sitio->url, PHP_URL_HOST);
+        $hasta = now()->addMinutes(10)->timestamp;
+        $r = $this->agente->hacerPeticion($sitio, 'cerrojo', [
+            'accion' => 'restaurar', 'plugin' => $plugin, 'hasta' => $hasta,
+            'firma' => InjertoService::firmarMensaje(self::mensajeRestaurar($host, $plugin, $hasta)),
+        ]);
+        $this->agente->obtenerStatus($sitio);
+
+        return $r;
+    }
+
     /** Administradores, bloqueados por intentos y degradados por Cerrojo (necesita Cerrojo 1.6 y worker 2.7). */
     public function usuarios(SitioWeb $sitio): array
     {

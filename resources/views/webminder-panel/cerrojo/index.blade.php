@@ -62,7 +62,15 @@
                                     · <a href="{{ route('webminder-panel.sitios.verificar', $sitio) }}" class="underline hover:text-slate-300">comprobar ahora</a>
                                 </p>
                                 @foreach(array_reverse($c['apartados'] ?? []) as $a)
-                                    <p class="text-xs text-rose-300">Apartado {{ $a['plugin'] }} · {{ \Illuminate\Support\Carbon::createFromTimestamp($a['fecha'], 'Europe/Madrid')->format('d/m H:i') }}</p>
+                                    <div class="text-xs text-rose-300">Apartado {{ $a['plugin'] }} · {{ \Illuminate\Support\Carbon::createFromTimestamp($a['fecha'], 'Europe/Madrid')->format('d/m H:i') }}
+                                        @if($a['restaurable'] ?? false)
+                                            <form method="POST" action="{{ route('webminder-panel.cerrojo.restaurar', $sitio) }}" class="inline" onsubmit="return confirm('¿Devolver {{ $a['plugin'] }} y confiar en él? Hazlo solo si sabes que es legítimo.')">
+                                                @csrf
+                                                <input type="hidden" name="plugin" value="{{ $a['plugin'] }}">
+                                                · <button class="underline hover:text-rose-100">devolver y confiar</button>
+                                            </form>
+                                        @endif
+                                    </div>
                                 @endforeach
                             </td>
                             <td class="p-4">

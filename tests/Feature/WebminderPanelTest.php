@@ -1012,6 +1012,26 @@ class WebminderPanelTest extends TestCase
         $this->assertSame('cerrojo|admin|www.acme.test|fernando|123', CerrojoService::mensajeAdmin('WWW.acme.test', 'fernando', 123));
     }
 
+    public function test_un_plugin_apartado_por_error_se_devuelve_con_firma(): void
+    {
+        $publica = $this->clavesInjerto();
+        $this->estadoCerrojo($this->sitio, ['installed' => true, 'version' => '1.9.4', 'mu_plugin' => true, 'pending' => 0, 'permiso_hasta' => 0, 'host' => 'www.acme.test', 'apartados' => [
+            ['plugin' => 'plugins/revslider', 'fecha' => time(), 'restaurable' => true],
+            ['plugin' => 'plugins/insert-php', 'fecha' => time(), 'restaurable' => false],
+        ]], '2.14.0');
+        Http::fake(['acme.test/*' => Http::response(['success' => true])]);
+        $usuario = User::factory()->create();
+
+        $html = $this->actingAs($usuario)->get(route('webminder-panel.cerrojo.index'))->assertOk()->getContent();
+        $this->assertSame(1, substr_count($html, 'devolver y confiar'), 'solo el que no está prohibido');
+
+        $this->actingAs($usuario)->post(route('webminder-panel.cerrojo.restaurar', $this->sitio), ['plugin' => 'plugins/revslider'])->assertSessionHas('success');
+        Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/cerrojo') && $r['accion'] === 'restaurar' && $r['plugin'] === 'plugins/revslider'
+            && sodium_crypto_sign_verify_detached(base64_decode($r['firma']), CerrojoService::mensajeRestaurar('www.acme.test', 'plugins/revslider', $r['hasta']), $publica));
+        // Mismo formato que cerrojo_mensaje_restaurar() en el plugin
+        $this->assertSame('cerrojo|restaurar|www.acme.test|plugins/x|123', CerrojoService::mensajeRestaurar('WWW.acme.test', 'plugins/x', 123));
+    }
+
     public function test_la_pagina_de_cerrojo_muestra_version_permiso_y_apartados(): void
     {
         $this->cerrojoEnPanel('1.5.0');

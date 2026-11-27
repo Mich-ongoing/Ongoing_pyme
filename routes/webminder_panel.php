@@ -101,6 +101,7 @@ Route::prefix('webminder-panel')->name('webminder-panel.')->middleware(['web', '
     Route::post('/cerrojo/comentarios', [CerrojoController::class, 'comentariosTodos'])->name('cerrojo.comentarios-todos');
     Route::post('/cerrojo/{sitio}/comentarios', [CerrojoController::class, 'comentarios'])->name('cerrojo.comentarios');
     Route::post('/cerrojo/{sitio}/limpiar', [CerrojoController::class, 'limpiar'])->name('cerrojo.limpiar');
+    Route::post('/cerrojo/{sitio}/restaurar', [CerrojoController::class, 'restaurar'])->name('cerrojo.restaurar');
     Route::get('/cerrojo/{sitio}/usuarios', [CerrojoController::class, 'usuarios'])->name('cerrojo.usuarios');
     Route::post('/cerrojo/{sitio}/usuarios/desbloquear', [CerrojoController::class, 'desbloquear'])->name('cerrojo.desbloquear');
     Route::post('/cerrojo/{sitio}/usuarios/admin', [CerrojoController::class, 'autorizarAdmin'])->name('cerrojo.admin');
